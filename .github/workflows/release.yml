@@ -1,0 +1,173 @@
+# =============================================================================
+#  OptiGD — Automated Release Pipeline
+# =============================================================================
+#  Trigger : push tag có định dạng v* (ví dụ: v1.0.0, v1.2.2, v1.1.0-rc1)
+#  Output  : GitHub Release (public ngay) với:
+#            - Tiêu đề      = tên tag
+#            - Release Notes = GitHub tự sinh từ commits + CHANGELOG.md
+#            - Assets       = các file .geode (Win64, Android32, Android64)
+#            - Tag chứa -alpha / -beta / -rc sẽ tự động thành PRERELEASE
+#  Quyền   : contents: write được khai báo rõ ràng để tạo Release không bị
+#            lỗi permission (403) — kể cả khi repo bật "Read repository
+#            contents and packages permissions" mặc định.
+#
+#  Cách test:
+#    git tag v0.0.1-test.1 && git push origin v0.0.1-test.1
+#    -> xem kết quả ở tab Actions -> Release, sản phẩm ở tab Releases.
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Quyền tối thiểu cho toàn workflow; job release được nâng lên contents: write.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) Đối chiếu tag với version trong mod.json.
+  #    KHÔNG CHẶN workflow: lệch version chỉ sinh cảnh báo (annotation
+  #    "::warning" trên GitHub Actions + một dòng ghi chú trong Release body).
+  # ---------------------------------------------------------------------------
+  check-version:
+    name: Check mod.json version vs tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mismatch: ${{ steps.compare.outputs.mismatch }}
+      notice: ${{ steps.compare.outputs.notice }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare tag with mod.json version
+        id: compare
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MOD_VERSION="$(grep -oE '"version":\s*"v?[0-9][^"]*"' mod.json | head -n1 | sed -E 's/.*"v?([0-9][^"]*)".*/\1/')"
+          echo "Tag (không có tiền tố v): $TAG"
+          echo "Version trong mod.json  : $MOD_VERSION"
+          if [ "$TAG" != "$MOD_VERSION" ]; then
+            echo "mismatch=true" >> "$GITHUB_OUTPUT"
+            NOTICE="⚠️ **Cảnh báo:** tag \`$TAG\` không khớp version trong \`mod.json\` (\`$MOD_VERSION\`). Hãy cân nhắc cập nhật \`mod.json\` ở bản phát hành kế tiếp."
+            {
+              echo "notice<<NOTICE_EOF"
+              echo "$NOTICE"
+              echo "NOTICE_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::warning file=mod.json,title=Version mismatch::Tag $TAG != mod.json version $MOD_VERSION"
+          else
+            echo "mismatch=false" >> "$GITHUB_OUTPUT"
+            echo "Version khớp với tag. ✅"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 2) Build file .geode cho từng nền tảng (giống build.yml).
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: Windows x64
+            os: windows-latest
+            target: Win64
+          - name: Android 32-bit
+            os: ubuntu-latest
+            target: Android32
+          - name: Android 64-bit
+            os: ubuntu-latest
+            target: Android64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          sdk: latest
+          combine: true
+          target: ${{ matrix.config.target }}
+
+  # ---------------------------------------------------------------------------
+  # 3) Gom các file .geode đã combine và tạo GitHub Release.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [check-version, build]
+    permissions:
+      contents: write   # BẮT BUỘC: quyền tạo Release / upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      # Gom toàn bộ .geode từ các job build (artifact: coderunknow.optigd.geode)
+      - name: Collect .geode artifacts
+        uses: geode-sdk/build-geode-mod/combine@main
+        id: build
+
+      # Trích đúng section của phiên bản này trong CHANGELOG.md (nếu có)
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SECTION="$(awk -v ver="[$TAG]" '
+            index($0, "## " ver) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md || true)"
+          if [ -n "$SECTION" ]; then
+            {
+              echo "body<<CHANGELOG_EOF"
+              echo "$SECTION"
+              echo "CHANGELOG_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Tag chứa -alpha / -beta / -rc (vd: v1.1.0-rc1) => Prerelease
+      - name: Detect prerelease
+        run: |
+          if echo "${GITHUB_REF_NAME}" | grep -qiE -- '-(alpha|beta|rc)'; then
+            echo "PRE=true" >> "$GITHUB_ENV"
+            echo "Tag này được đánh dấu là PRERELEASE."
+          else
+            echo "PRE=false" >> "$GITHUB_ENV"
+            echo "Tag này là release chính thức."
+          fi
+
+      # Ghép Release body: cảnh báo lệch version (nếu có) + CHANGELOG
+      - name: Compose release body
+        run: |
+          {
+            if [ -n "${{ needs.check-version.outputs.notice }}" ]; then
+              echo "> ${{ needs.check-version.outputs.notice }}"
+              echo ""
+            fi
+            if [ -n "${{ steps.changelog.outputs.body }}" ]; then
+              echo "## 📋 Changelog"
+              echo ""
+              echo "${{ steps.changelog.outputs.body }}"
+            fi
+          } > release_body.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Tên tag làm tiêu đề Release (vd: "v1.0.0")
+          name: ${{ github.ref_name }}
+          # Tự động sinh Release Notes từ các commit kể từ tag trước
+          generate_release_notes: true
+          # Nội dung bổ sung (cảnh báo version + CHANGELOG), có thể rỗng
+          body_path: release_body.md
+          prerelease: ${{ env.PRE == 'true' }}
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.build.outputs.build-output }}/*.geode
