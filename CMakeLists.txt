@@ -53,7 +53,10 @@ if (DEFINED ENV{GEODE_SDK} OR DEFINED GEODE_SDK)
 else()
     message(STATUS "Standalone build: building core library, test suite, and benchmark harness.")
 
+    find_package(Threads REQUIRED)
+
     add_library(optigd_core STATIC ${OPTIGD_CORE_SOURCES})
+    target_link_libraries(optigd_core PUBLIC Threads::Threads)
     target_include_directories(optigd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
     add_executable(optigd_tests tests/UnitTests.cpp)
