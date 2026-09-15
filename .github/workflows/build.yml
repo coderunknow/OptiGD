@@ -1,0 +1,76 @@
+name: Build Geode Mod
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Native Verification & Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential
+
+      - name: Configure CMake
+        run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Test & Benchmark Harness
+        run: cmake --build build
+
+      - name: Run Unit Tests
+        run: ./build/optigd_tests
+
+      - name: Run Synthetic Benchmarks
+        run: ./build/optigd_benchmark
+
+  build:
+    name: Build ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: Windows x64
+            os: windows-latest
+            target: win
+
+          - name: Android 32-bit
+            os: ubuntu-latest
+            target: Android32
+
+          - name: Android 64-bit
+            os: ubuntu-latest
+            target: Android64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the mod
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          combine: true
+          target: ${{ matrix.config.target }}
+
+  package:
+    name: Package Combined .geode
+    runs-on: ubuntu-latest
+    needs: ['build']
+    steps:
+      - uses: geode-sdk/build-geode-mod/combine@main
+        id: build
+
+      - name: Upload .geode Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coderunknow.optigd.geode
+          path: ${{ steps.build.outputs.build-output }}
