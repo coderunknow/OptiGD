@@ -158,3 +158,24 @@ cmake --build build
 2. The GitHub Actions workflow `.github/workflows/build.yml` compiles for **Windows x64**, **Android 32-bit**, and **Android 64-bit**.
 3. Download the packaged `coderunknow.optigd.geode` artifact directly from the GitHub Actions run summary.
 4. Place `coderunknow.optigd.geode` into your Geometry Dash `geode/mods/` directory.
+
+---
+
+## 9. Git Checkpoint History & Quality Gate Audit [MEASURED]
+
+- **Working Branch**: `arena/01a0a360-optigd`
+- **Pull Request**: [#1: OptiGD v1.0.0 High-Performance Optimization Engine & Multi-Platform Geode CI](https://github.com/coderunknow/OptiGD/pull/1)
+- **CI Run**: [Run #34933233751](https://github.com/coderunknow/OptiGD/actions/runs/34933233751) (100% Green across all 5 matrix jobs)
+- **Built Artifact**: `coderunknow.optigd.geode` (SHA-256 `85e4e61503ed0fc916a6de84f833e5d7dc41360afb62cc847a72a729880306eb`, 136,757 bytes)
+
+### Milestone Checkpoint Commits:
+1. `fd736ea`: `feat(core): implement core engine architecture, memory arena, and spatial hash`
+2. `6da59e2`: `feat(optimization): implement visibility culler, particle governor, trigger optimizer, and adaptive governor`
+3. `5cdf38b`: `test(benchmarks): add unit tests, synthetic benchmark harness, and test runner scripts`
+4. `f1e66f2`: `ci(github-actions): add multi-platform Geode mod build workflow and hooks`
+5. `7b9e9e6`: `docs: add architecture specification, benchmark analysis, evidence report, and v1.0.0 changelog`
+6. `064c16a`: `fix(tests): include <cmath> for std::abs compatibility with GCC 13/14`
+7. `c9c697d`: `fix(types): explicitly include <cstdint> and <cstddef> across all core and compatibility headers`
+8. `7ce3ffc`: `fix(mod.json): set geode version to 5.10.1 and gd to * for Geode SDK regex matching`
+9. `43a6c36`: `fix(cmake): resolve keyword signature clash in target_link_libraries for Windows Geode build`
+
