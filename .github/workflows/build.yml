@@ -27,11 +27,23 @@ jobs:
         run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Test & Benchmark Harness
-        run: cmake --build build --verbose
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          cmake --build build --verbose > build.log 2>&1
+          STATUS=$?
+          echo "Build finished with status $STATUS"
+          tail -n 100 build.log
+          gh pr comment 1 --body "#### Native Verification Build Log (Exit Code $STATUS):
+          \`\`\`
+          $(tail -n 80 build.log)
+          \`\`\`" || true
+          exit $STATUS
 
       - name: Run Unit Tests
         run: |
-          ls -la build
           chmod +x build/optigd_tests
           ./build/optigd_tests
 
