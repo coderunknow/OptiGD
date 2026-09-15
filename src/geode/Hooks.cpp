@@ -8,6 +8,8 @@
 #include "../core/OptiGDManager.hpp"
 #include "../config/ConfigManager.hpp"
 #include "../ui/DiagnosticsOverlay.hpp"
+#include <cstdint>
+#include <cstddef>
 
 using namespace geode::prelude;
 

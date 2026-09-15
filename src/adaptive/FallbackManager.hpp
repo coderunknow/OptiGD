@@ -4,6 +4,8 @@
 #include "AdaptiveGovernor.hpp"
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::adaptive {
 

@@ -6,6 +6,8 @@
 #include <chrono>
 #include <mutex>
 #include <vector>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::profiling {
 

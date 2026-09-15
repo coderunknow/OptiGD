@@ -12,6 +12,8 @@
 #include "../config/ConfigManager.hpp"
 #include <memory>
 #include <mutex>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::core {
 

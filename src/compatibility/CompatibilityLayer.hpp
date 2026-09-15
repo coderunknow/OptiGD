@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::compat {
 

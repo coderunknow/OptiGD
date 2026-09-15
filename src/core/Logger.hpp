@@ -6,6 +6,8 @@
 #include <mutex>
 #include <chrono>
 #include <sstream>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::core {
 

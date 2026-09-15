@@ -7,6 +7,8 @@
 #include <deque>
 #include <string>
 #include <mutex>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::diagnostics {
 
