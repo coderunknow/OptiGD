@@ -76,12 +76,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "=== RE-RUNNING BUILD TO CAPTURE ERROR ==="
-          cmake --build build --verbose > build_fail.log 2>&1 || true
-          tail -n 80 build_fail.log
-          gh pr comment 1 --body "#### ${{ matrix.config.name }} Build Failure Log:
+          cmake -B build_diag -DCMAKE_BUILD_TYPE=Release -G Ninja > diag.log 2>&1 || true
+          tail -n 80 diag.log
+          gh pr comment 1 --body "#### ${{ matrix.config.name }} Configure Failure Log:
           \`\`\`
-          $(tail -n 60 build_fail.log)
+          $(tail -n 60 diag.log)
           \`\`\`" || true
           exit 1
 
