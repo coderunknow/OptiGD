@@ -1,0 +1,53 @@
+{
+	"geode": ">=v4.0.0",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081",
+		"ios": "2.2081"
+	},
+	"id": "coderunknow.optigd",
+	"name": "OptiGD",
+	"version": "v1.0.0",
+	"developer": "coderunknow",
+	"description": "High-performance optimization engine and frame-time stabilization mod for Geometry Dash 2.2.",
+	"repository": "https://github.com/coderunknow/OptiGD",
+	"settings": {
+		"tier-preset": {
+			"name": "Performance Profile",
+			"description": "Select optimization profile. Default is High Performance (aggressive culling for low-spec/heavy levels).",
+			"type": "string",
+			"default": "LowEnd",
+			"one-of": [
+				"LowEnd",
+				"Balanced",
+				"HighEnd",
+				"Custom"
+			]
+		},
+		"enable-culling": {
+			"name": "Spatial Frustum Culling",
+			"description": "Culls offscreen level objects using 2D spatial hash to eliminate redundant CPU/GPU updates.",
+			"type": "bool",
+			"default": true
+		},
+		"enable-particle-limits": {
+			"name": "Particle Throttling & Sleep",
+			"description": "Sleeps offscreen particle emitters and scales cosmetic particle density under load.",
+			"type": "bool",
+			"default": true
+		},
+		"enable-adaptive": {
+			"name": "Adaptive Dynamic Governor",
+			"description": "Monitors real-time frame budget and prevents micro-stutters by automatically adjusting fidelity.",
+			"type": "bool",
+			"default": true
+		},
+		"show-diagnostics": {
+			"name": "Diagnostics HUD",
+			"description": "Displays live frame-rate, frame-time variance, and culling efficiency statistics.",
+			"type": "bool",
+			"default": false
+		}
+	}
+}
