@@ -49,10 +49,6 @@ if (DEFINED ENV{GEODE_SDK} OR DEFINED GEODE_SDK)
     )
     target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-    if (WIN32)
-        target_link_libraries(${PROJECT_NAME} PRIVATE psapi)
-    endif()
-
     add_subdirectory(${GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
     setup_geode_mod(${PROJECT_NAME})
 else()

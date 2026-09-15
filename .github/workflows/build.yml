@@ -9,8 +9,6 @@ on:
       - "**"
   workflow_dispatch:
 
-permissions: write-all
-
 jobs:
   test:
     name: Native Verification & Benchmark
@@ -62,27 +60,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build the mod
-        id: build_mod
-        continue-on-error: true
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: latest
           combine: true
           target: ${{ matrix.config.target }}
-
-      - name: Report Build Error
-        if: steps.build_mod.outcome == 'failure'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cmake -B build_diag -DCMAKE_BUILD_TYPE=Release -G Ninja > diag.log 2>&1 || true
-          tail -n 80 diag.log
-          gh pr comment 1 --body "#### ${{ matrix.config.name }} Configure Failure Log:
-          \`\`\`
-          $(tail -n 60 diag.log)
-          \`\`\`" || true
-          exit 1
 
   package:
     name: Package Combined .geode
