@@ -20,7 +20,7 @@ void syncSettingsWithConfig() {
     auto mod = Mod::get();
     if (!mod) return;
 
-    std::string tierSetting = mod->getSettingValue<std::string>("tier-preset");
+    std::string tierSetting = std::string(mod->getSettingValue<std::string_view>("tier-preset"));
     if (tierSetting == "LowEnd") {
         configMgr.applyTierPreset(core::PerformanceTier::LowEnd);
     } else if (tierSetting == "Balanced") {
@@ -47,6 +47,8 @@ void initializeMod() {
 $on_mod(Loaded) {
     optigd::geode_mod::initializeMod();
 }
+
+#if defined(GEODE_IS_WINDOWS)
 
 class $modify(OptiPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
@@ -87,6 +89,8 @@ class $modify(OptiPlayLayer, PlayLayer) {
         PlayLayer::updateVisibility(dt);
     }
 };
+
+#endif // GEODE_IS_WINDOWS
 
 class $modify(OptiMenuLayer, MenuLayer) {
     bool init() {

@@ -27,26 +27,18 @@ jobs:
         run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Test & Benchmark Harness
-        id: build_step
-        run: |
-          cmake --build build --verbose 2>&1 | tee build.log
-
-      - name: Report Build Failure Log
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr comment 1 --body "#### Native Verification Build Failure Log:
-          \`\`\`
-          $(tail -n 80 build.log || echo 'No build.log')
-          \`\`\`" || true
+        run: cmake --build build --verbose
 
       - name: Run Unit Tests
-        run: ./build/optigd_tests
+        run: |
+          ls -la build
+          chmod +x build/optigd_tests
+          ./build/optigd_tests
 
       - name: Run Synthetic Benchmarks
-        run: ./build/optigd_benchmark
+        run: |
+          chmod +x build/optigd_benchmark
+          ./build/optigd_benchmark
 
   build:
     name: Build ${{ matrix.config.name }}
@@ -71,23 +63,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build the mod
-        id: build_mod
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: latest
           combine: true
           target: ${{ matrix.config.target }}
-
-      - name: Report Mod Build Failure Log
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr comment 1 --body "#### ${{ matrix.config.name }} Build Failure Log:
-          \`\`\`
-          $(find . -maxdepth 4 -name "*.log" -exec tail -n 60 {} + 2>/dev/null || echo 'No logs found')
-          \`\`\`" || true
 
   package:
     name: Package Combined .geode

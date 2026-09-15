@@ -7,14 +7,13 @@
     #define OPTIGD_OS_WINDOWS 1
     #include <windows.h>
     #include <psapi.h>
+    #pragma comment(lib, "psapi.lib")
 #elif defined(__ANDROID__)
     #define OPTIGD_OS_ANDROID 1
     #include <unistd.h>
-    #include <sys/sysinfo.h>
 #elif defined(__linux__)
     #define OPTIGD_OS_LINUX 1
     #include <unistd.h>
-    #include <sys/sysinfo.h>
 #elif defined(__APPLE__)
     #define OPTIGD_OS_APPLE 1
     #include <unistd.h>
@@ -76,9 +75,10 @@ SystemInfo Platform::getSystemInfo() {
 #endif
 
 #if defined(OPTIGD_OS_LINUX) || defined(OPTIGD_OS_ANDROID)
-    struct sysinfo si;
-    if (sysinfo(&si) == 0) {
-        info.totalRamMb = (static_cast<uint64_t>(si.totalram) * si.mem_unit) / (1024 * 1024);
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long pageSize = sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && pageSize > 0) {
+        info.totalRamMb = (static_cast<uint64_t>(pages) * static_cast<uint64_t>(pageSize)) / (1024 * 1024);
     }
 #elif defined(OPTIGD_OS_WINDOWS)
     MEMORYSTATUSEX memStatus;
@@ -107,7 +107,7 @@ size_t Platform::getCurrentProcessMemoryKb() {
 #if defined(OPTIGD_OS_LINUX) || defined(OPTIGD_OS_ANDROID)
     std::ifstream statm("/proc/self/statm");
     if (statm.is_open()) {
-        size_t size, resident;
+        size_t size = 0, resident = 0;
         if (statm >> size >> resident) {
             long pageSizeKb = sysconf(_SC_PAGE_SIZE) / 1024;
             return resident * pageSizeKb;
