@@ -25,7 +25,7 @@ jobs:
         run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Test & Benchmark Harness
-        run: cmake --build build
+        run: cmake --build build --verbose
 
       - name: Run Unit Tests
         run: ./build/optigd_tests
@@ -42,7 +42,7 @@ jobs:
         config:
           - name: Windows x64
             os: windows-latest
-            target: win
+            target: Win64
 
           - name: Android 32-bit
             os: ubuntu-latest
@@ -58,6 +58,7 @@ jobs:
       - name: Build the mod
         uses: geode-sdk/build-geode-mod@main
         with:
+          sdk: latest
           combine: true
           target: ${{ matrix.config.target }}
 

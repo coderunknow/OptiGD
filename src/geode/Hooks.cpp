@@ -2,9 +2,8 @@
 
 #ifdef GEODE_MOD_ID
 
+#include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
-#include <Geode/modify/CCNode.hpp>
-#include <Geode/modify/CCParticleSystemQuad.hpp>
 #include <Geode/modify/MenuLayer.hpp>
 #include "../core/OptiGDManager.hpp"
 #include "../config/ConfigManager.hpp"
@@ -64,11 +63,16 @@ class $modify(OptiPlayLayer, PlayLayer) {
         PlayLayer::onQuit();
     }
 
-    void update(float dt) {
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        optigd::core::OptiGDManager::instance().onLevelLoaded();
+    }
+
+    void postUpdate(float dt) {
         static uint64_t s_frameCounter = 0;
         optigd::core::OptiGDManager::instance().beginFrame(++s_frameCounter);
 
-        PlayLayer::update(dt);
+        PlayLayer::postUpdate(dt);
 
         optigd::core::OptiGDManager::instance().endFrame();
     }
@@ -80,20 +84,17 @@ class $modify(OptiPlayLayer, PlayLayer) {
             return;
         }
 
-        // Fast spatial culling logic
         PlayLayer::updateVisibility(dt);
     }
 };
 
-class $modify(OptiParticleSystem, CCParticleSystemQuad) {
-    void update(float dt) {
-        const auto& config = optigd::config::ConfigManager::instance().getConfig();
-        if (!config.flags.enableParticleThrottling) {
-            CCParticleSystemQuad::update(dt);
-            return;
+class $modify(OptiMenuLayer, MenuLayer) {
+    bool init() {
+        if (!MenuLayer::init()) {
+            return false;
         }
-
-        CCParticleSystemQuad::update(dt);
+        geode::log::info("OptiGD v1.0.0 active.");
+        return true;
     }
 };
 
