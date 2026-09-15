@@ -1,10 +1,10 @@
 {
-	"geode": "v5.10.1",
+	"geode": "5.10.1",
 	"gd": {
-		"win": "2.2081",
-		"android": "2.2081",
-		"mac": "2.2081",
-		"ios": "2.2081"
+		"win": "*",
+		"android": "*",
+		"mac": "*",
+		"ios": "*"
 	},
 	"id": "coderunknow.optigd",
 	"name": "OptiGD",
