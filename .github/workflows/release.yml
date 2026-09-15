@@ -5,15 +5,12 @@
 #  Output  : GitHub Release (public ngay) với:
 #            - Tiêu đề      = tên tag
 #            - Release Notes = GitHub tự sinh từ commits + CHANGELOG.md
-#            - Assets       = các file .geode (Win64, Android32, Android64)
+#            - Assets       = đúng một file .geode cho mỗi target
+#                             (Win64, Android32, Android64)
 #            - Tag chứa -alpha / -beta / -rc sẽ tự động thành PRERELEASE
 #  Quyền   : contents: write được khai báo rõ ràng để tạo Release không bị
 #            lỗi permission (403) — kể cả khi repo bật "Read repository
 #            contents and packages permissions" mặc định.
-#
-#  Cách test:
-#    git tag v0.0.1-test.1 && git push origin v0.0.1-test.1
-#    -> xem kết quả ở tab Actions -> Release, sản phẩm ở tab Releases.
 # =============================================================================
 
 name: Release
@@ -30,8 +27,9 @@ permissions:
 jobs:
   # ---------------------------------------------------------------------------
   # 1) Đối chiếu tag với version trong mod.json.
-  #    KHÔNG CHẶN workflow: lệch version chỉ sinh cảnh báo (annotation
-  #    "::warning" trên GitHub Actions + một dòng ghi chú trong Release body).
+  #    Lệch version chỉ sinh cảnh báo, không chặn workflow.
+  #    Metadata không hợp lệ (tag không phải SemVer hoặc mod.json hỏng) thì
+  #    fail rõ ràng để không tạo một Release không thể xác định version.
   # ---------------------------------------------------------------------------
   check-version:
     name: Check mod.json version vs tag
@@ -39,34 +37,56 @@ jobs:
     permissions:
       contents: read
     outputs:
+      tag: ${{ steps.compare.outputs.tag }}
+      mod_version: ${{ steps.compare.outputs.mod_version }}
       mismatch: ${{ steps.compare.outputs.mismatch }}
-      notice: ${{ steps.compare.outputs.notice }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Compare tag with mod.json version
         id: compare
+        shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          MOD_VERSION="$(grep -oE '"version":\s*"v?[0-9][^"]*"' mod.json | head -n1 | sed -E 's/.*"v?([0-9][^"]*)".*/\1/')"
+          set -Eeuo pipefail
+
+          TAG_NAME="${GITHUB_REF_NAME}"
+          TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$TAG_NAME" =~ $TAG_PATTERN ]]; then
+            echo "::error title=Invalid release tag::Tag '$TAG_NAME' is not a valid vX.Y.Z SemVer tag."
+            exit 1
+          fi
+
+          TAG="${TAG_NAME#v}"
+          if ! MOD_VERSION_RAW="$(jq -er '.version | select(type == "string")' mod.json)"; then
+            echo "::error file=mod.json,title=Missing version::mod.json must contain a string version field."
+            exit 1
+          fi
+
+          MOD_VERSION="${MOD_VERSION_RAW#v}"
+          VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$MOD_VERSION" =~ $VERSION_PATTERN ]]; then
+            echo "::error file=mod.json,title=Invalid version::mod.json version '$MOD_VERSION_RAW' is not a valid SemVer version."
+            exit 1
+          fi
+
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'mod_version=%s\n' "$MOD_VERSION" >> "$GITHUB_OUTPUT"
+
           echo "Tag (không có tiền tố v): $TAG"
           echo "Version trong mod.json  : $MOD_VERSION"
-          if [ "$TAG" != "$MOD_VERSION" ]; then
-            echo "mismatch=true" >> "$GITHUB_OUTPUT"
-            NOTICE="⚠️ **Cảnh báo:** tag \`$TAG\` không khớp version trong \`mod.json\` (\`$MOD_VERSION\`). Hãy cân nhắc cập nhật \`mod.json\` ở bản phát hành kế tiếp."
-            {
-              echo "notice<<NOTICE_EOF"
-              echo "$NOTICE"
-              echo "NOTICE_EOF"
-            } >> "$GITHUB_OUTPUT"
-            echo "::warning file=mod.json,title=Version mismatch::Tag $TAG != mod.json version $MOD_VERSION"
-          else
-            echo "mismatch=false" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == "$MOD_VERSION" ]]; then
+            printf 'mismatch=false\n' >> "$GITHUB_OUTPUT"
             echo "Version khớp với tag. ✅"
+          else
+            printf 'mismatch=true\n' >> "$GITHUB_OUTPUT"
+            printf '::warning file=mod.json,title=Version mismatch::Tag %s != mod.json version %s\n' "$TAG" "$MOD_VERSION"
+            echo "Version lệch tag; tiếp tục build theo thiết kế. ⚠️"
           fi
 
   # ---------------------------------------------------------------------------
-  # 2) Build file .geode cho từng nền tảng (giống build.yml).
+  # 2) Build đúng một file .geode riêng cho từng nền tảng.
+  #    combine=false là chủ ý: combine=true tạo một package đa nền tảng duy nhất,
+  #    không thể đáp ứng yêu cầu Release có 3 asset riêng.
   # ---------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.config.name }}
@@ -90,14 +110,66 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build the mod
+        id: build
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: latest
-          combine: true
+          combine: false
           target: ${{ matrix.config.target }}
 
+      # Không âm thầm upload 0 hoặc nhiều file: mỗi target phải tạo đúng một
+      # package .geode trước khi artifact được chuyển sang job release.
+      - name: Verify .geode output (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BUILD_OUTPUT: ${{ steps.build.outputs.build-output }}
+        run: |
+          set -Eeuo pipefail
+          files=()
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find "$BUILD_OUTPUT" -maxdepth 1 -type f -name '*.geode' -print0)
+
+          if (( ${#files[@]} != 1 )); then
+            echo "::error::Expected exactly one .geode file for ${{ matrix.config.target }}, found ${#files[@]}."
+            printf '%s\n' "${files[@]}"
+            exit 1
+          fi
+          if [[ ! -s "${files[0]}" ]]; then
+            echo "::error::The .geode file for ${{ matrix.config.target }} is empty."
+            exit 1
+          fi
+          printf 'Verified %s (%s bytes)\n' "${files[0]}" "$(stat -c '%s' "${files[0]}")"
+
+      - name: Verify .geode output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BUILD_OUTPUT: ${{ steps.build.outputs.build-output }}
+        run: |
+          $files = @(Get-ChildItem -LiteralPath $env:BUILD_OUTPUT -Filter '*.geode' -File -ErrorAction Stop)
+          if ($files.Count -ne 1) {
+            Write-Error "Expected exactly one .geode file for ${{ matrix.config.target }}, found $($files.Count)."
+            $files | ForEach-Object { Write-Output $_.FullName }
+            exit 1
+          }
+          if ($files[0].Length -le 0) {
+            Write-Error "The .geode file for ${{ matrix.config.target }} is empty."
+            exit 1
+          }
+          Write-Output "Verified $($files[0].FullName) ($($files[0].Length) bytes)"
+
+      - name: Upload target artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: geode-build-${{ matrix.config.target }}
+          path: ${{ steps.build.outputs.build-output }}/*.geode
+          if-no-files-found: error
+          retention-days: 1
+
   # ---------------------------------------------------------------------------
-  # 3) Gom các file .geode đã combine và tạo GitHub Release.
+  # 3) Tải đúng ba artifact, đổi tên để tránh trùng basename, rồi tạo Release.
   # ---------------------------------------------------------------------------
   release:
     name: Create GitHub Release
@@ -108,33 +180,114 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Gom toàn bộ .geode từ các job build (artifact: coderunknow.optigd.geode)
-      - name: Collect .geode artifacts
-        uses: geode-sdk/build-geode-mod/combine@main
-        id: build
+      - name: Download Win64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geode-build-Win64
+          path: release-inputs/Win64
 
-      # Trích đúng section của phiên bản này trong CHANGELOG.md (nếu có)
-      - name: Extract changelog section
-        id: changelog
+      - name: Download Android32 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geode-build-Android32
+          path: release-inputs/Android32
+
+      - name: Download Android64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: geode-build-Android64
+          path: release-inputs/Android64
+
+      - name: Prepare target-specific Release assets
+        shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          SECTION="$(awk -v ver="[$TAG]" '
-            index($0, "## " ver) == 1 { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md || true)"
-          if [ -n "$SECTION" ]; then
-            {
-              echo "body<<CHANGELOG_EOF"
-              echo "$SECTION"
-              echo "CHANGELOG_EOF"
-            } >> "$GITHUB_OUTPUT"
+          set -Eeuo pipefail
+          mkdir -p release-assets
+
+          copy_one_target() {
+            local target="$1"
+            local source_dir="release-inputs/$target"
+            local destination="release-assets/coderunknow.optigd-${target}.geode"
+            local files=()
+
+            while IFS= read -r -d '' file; do
+              files+=("$file")
+            done < <(find "$source_dir" -type f -name '*.geode' -print0)
+
+            if (( ${#files[@]} != 1 )); then
+              echo "::error::Expected exactly one .geode artifact for $target, found ${#files[@]}."
+              printf '%s\n' "${files[@]}"
+              exit 1
+            fi
+            if [[ ! -s "${files[0]}" ]]; then
+              echo "::error::The downloaded .geode artifact for $target is empty."
+              exit 1
+            fi
+
+            cp -- "${files[0]}" "$destination"
+            printf 'Prepared %s from %s\n' "$destination" "${files[0]}"
+          }
+
+          copy_one_target Win64
+          copy_one_target Android32
+          copy_one_target Android64
+
+          assets=(release-assets/*.geode)
+          if (( ${#assets[@]} != 3 )); then
+            echo "::error::Expected exactly three Release .geode assets, found ${#assets[@]}."
+            printf '%s\n' "${assets[@]}"
+            exit 1
+          fi
+          printf 'Prepared Release assets:\n%s\n' "${assets[@]}"
+
+      - name: Extract changelog section
+        shell: bash
+        env:
+          TAG_VERSION: ${{ needs.check-version.outputs.tag }}
+        run: |
+          set -Eeuo pipefail
+          : > release_changelog.md
+          if [[ -f CHANGELOG.md ]]; then
+            SECTION="$(awk -v ver="[$TAG_VERSION]" '
+              index($0, "## " ver) == 1 { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+            ' CHANGELOG.md)"
+            if [[ -n "$SECTION" ]]; then
+              printf '%s\n' "$SECTION" > release_changelog.md
+            fi
           fi
 
-      # Tag chứa -alpha / -beta / -rc (vd: v1.1.0-rc1) => Prerelease
-      - name: Detect prerelease
+      # Ghép Release body bằng printf/cat để markdown (đặc biệt backticks)
+      # không bị shell diễn giải thành command substitution.
+      - name: Compose release body
+        shell: bash
+        env:
+          TAG_VERSION: ${{ needs.check-version.outputs.tag }}
+          MOD_VERSION: ${{ needs.check-version.outputs.mod_version }}
+          VERSION_MISMATCH: ${{ needs.check-version.outputs.mismatch }}
         run: |
-          if echo "${GITHUB_REF_NAME}" | grep -qiE -- '-(alpha|beta|rc)'; then
+          set -Eeuo pipefail
+          : > release_body.md
+
+          if [[ "$VERSION_MISMATCH" == "true" ]]; then
+            printf '> ⚠️ **Cảnh báo:** tag `%s` không khớp version trong `mod.json` (`%s`). Hãy cân nhắc cập nhật `mod.json` ở bản phát hành kế tiếp.\n\n' \
+              "$TAG_VERSION" "$MOD_VERSION" >> release_body.md
+          fi
+
+          if [[ -s release_changelog.md ]]; then
+            printf '## 📋 Changelog\n\n' >> release_body.md
+            cat release_changelog.md >> release_body.md
+            printf '\n' >> release_body.md
+          fi
+
+      - name: Detect prerelease
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -Eeuo pipefail
+          if printf '%s\n' "$TAG_NAME" | grep -qEi -- '-(alpha|beta|rc)([0-9.]|$)'; then
             echo "PRE=true" >> "$GITHUB_ENV"
             echo "Tag này được đánh dấu là PRERELEASE."
           else
@@ -142,32 +295,16 @@ jobs:
             echo "Tag này là release chính thức."
           fi
 
-      # Ghép Release body: cảnh báo lệch version (nếu có) + CHANGELOG
-      - name: Compose release body
-        run: |
-          {
-            if [ -n "${{ needs.check-version.outputs.notice }}" ]; then
-              echo "> ${{ needs.check-version.outputs.notice }}"
-              echo ""
-            fi
-            if [ -n "${{ steps.changelog.outputs.body }}" ]; then
-              echo "## 📋 Changelog"
-              echo ""
-              echo "${{ steps.changelog.outputs.body }}"
-            fi
-          } > release_body.md
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # Tên tag làm tiêu đề Release (vd: "v1.0.0")
           name: ${{ github.ref_name }}
-          # Tự động sinh Release Notes từ các commit kể từ tag trước
           generate_release_notes: true
-          # Nội dung bổ sung (cảnh báo version + CHANGELOG), có thể rỗng
           body_path: release_body.md
           prerelease: ${{ env.PRE == 'true' }}
           draft: false
           fail_on_unmatched_files: true
           files: |
-            ${{ steps.build.outputs.build-output }}/*.geode
+            release-assets/coderunknow.optigd-Win64.geode
+            release-assets/coderunknow.optigd-Android32.geode
+            release-assets/coderunknow.optigd-Android64.geode
