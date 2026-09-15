@@ -13,6 +13,7 @@
 #include <cassert>
 #include <vector>
 #include <string>
+#include <cmath>
 
 #define TEST_ASSERT(cond, msg) \
     do { \
