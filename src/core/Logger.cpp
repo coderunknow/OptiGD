@@ -23,6 +23,11 @@ LogLevel Logger::getLevel() const {
     return m_minLevel;
 }
 
+void Logger::setCallback(LogCallback callback) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_callback = std::move(callback);
+}
+
 void Logger::log(LogLevel level, std::string_view msg) {
     if (level < m_minLevel || level == LogLevel::None) {
         return;
@@ -33,10 +38,17 @@ void Logger::log(LogLevel level, std::string_view msg) {
 
     LogEntry entry{level, static_cast<uint64_t>(now), std::string(msg)};
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    appendToRingBuffer(entry);
-    if (m_fileLoggingEnabled) {
-        writeToFile(entry);
+    LogCallback cb;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        appendToRingBuffer(entry);
+        if (m_fileLoggingEnabled) {
+            writeToFile(entry);
+        }
+        cb = m_callback;
+    }
+    if (cb) {
+        cb(level, msg);
     }
 }
 

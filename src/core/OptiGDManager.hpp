@@ -5,15 +5,17 @@
 #include "../optimization/VisibilityCuller.hpp"
 #include "../optimization/ParticleGovernor.hpp"
 #include "../optimization/TriggerOptimizer.hpp"
+#include "../optimization/MatrixCache.hpp"
 #include "../adaptive/AdaptiveGovernor.hpp"
 #include "../adaptive/FallbackManager.hpp"
+#include "../profiling/Profiler.hpp"
 #include "../diagnostics/DiagnosticsEngine.hpp"
 #include "../compatibility/CompatibilityLayer.hpp"
 #include "../config/ConfigManager.hpp"
-#include <memory>
-#include <mutex>
-#include <cstdint>
-#include <cstddef>
+#include "../ui/DiagnosticsOverlay.hpp"
+#include <chrono>
+#include <string>
+#include <string_view>
 
 namespace optigd::core {
 
@@ -21,43 +23,57 @@ class OptiGDManager {
 public:
     static OptiGDManager& instance();
 
-    void initialize();
+    void initialize(std::string_view gdVersion = kTargetGDVersion,
+                    std::string_view geodeVersion = kTargetGeodeVersion);
     void shutdown();
 
-    void onLevelLoaded();
-    void onLevelExited();
+    void onLevelLoad();
+    void onLevelReset();
+    void onLevelExit();
 
-    void beginFrame(uint64_t frameIndex);
+    void beginFrame();
+    void setExternalFrameDeltaUs(double frameDeltaUs) { m_externalFrameDeltaUs = frameDeltaUs; }
+    void recordHeapAllocationAvoided(uint32_t count = 1) { m_frameHeapAllocationsAvoided += count; }
+    void recordSubsystemOverheadUs(double overheadUs) { m_frameOptigdOverheadUs += overheadUs; }
     void endFrame();
 
-    // Accessors
-    MemoryArena& getArena() { return m_frameArena; }
-    optimization::VisibilityCuller& getCuller() { return m_culler; }
+    // Subsystem accessors
+    MemoryArena& getFrameArena() { return m_frameArena; }
+    optimization::VisibilityCuller& getVisibilityCuller() { return m_culler; }
     optimization::ParticleGovernor& getParticleGovernor() { return m_particleGovernor; }
     optimization::TriggerOptimizer& getTriggerOptimizer() { return m_triggerOptimizer; }
-    adaptive::AdaptiveGovernor& getAdaptiveGovernor() { return m_adaptiveGovernor; }
+    adaptive::AdaptiveGovernor& getAdaptiveGovernor() { return m_governor; }
     adaptive::FallbackManager& getFallbackManager() { return m_fallbackManager; }
 
-    const FrameStats& getCurrentFrameStats() const { return m_currentStats; }
-    bool isLevelActive() const { return m_levelActive; }
+    const FrameStats& getLatestFrameStats() const { return m_currentStats; }
+    const OptiConfig& getActiveConfig() const { return m_activeConfig; }
+    void reloadConfig();
+
+    bool isInitialized() const { return m_initialized; }
 
 private:
     OptiGDManager();
-    ~OptiGDManager();
 
-    std::mutex m_mutex;
+    void applyConfigToSubsystems();
+
     bool m_initialized{false};
-    bool m_levelActive{false};
+    uint64_t m_frameCounter{0};
+    std::chrono::steady_clock::time_point m_frameStartTime;
+    double m_externalFrameDeltaUs{0.0};
+    double m_frameOptigdOverheadUs{0.0};
+    uint32_t m_frameHeapAllocationsAvoided{0};
+    uint64_t m_frameStartMatrixHits{0};
+    uint64_t m_frameStartMatrixMisses{0};
+
+    OptiConfig m_activeConfig;
+    FrameStats m_currentStats;
 
     MemoryArena m_frameArena;
     optimization::VisibilityCuller m_culler;
     optimization::ParticleGovernor m_particleGovernor;
     optimization::TriggerOptimizer m_triggerOptimizer;
-    adaptive::AdaptiveGovernor m_adaptiveGovernor;
+    adaptive::AdaptiveGovernor m_governor;
     adaptive::FallbackManager m_fallbackManager;
-
-    FrameStats m_currentStats{};
-    uint64_t m_frameStartTimeUs{0};
 };
 
 } // namespace optigd::core

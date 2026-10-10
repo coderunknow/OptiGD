@@ -1,129 +1,105 @@
-# OptiGD v1.0.0
+# OptiGD `v0.1.0-beta1` — Production Performance Engine for Geometry Dash
 
-[![Build Geode Mod](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml/badge.svg)](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](https://github.com/coderunknow/OptiGD/releases)
-[![Target](https://img.shields.io/badge/Geometry%20Dash-2.2081-brightgreen.svg)](https://geode-sdk.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Build & Verify OptiGD](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml/badge.svg)](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml)
+[![Version](https://img.shields.io/badge/Version-v0.1.0--beta1-blue.svg)](mod.json)
+[![Geode SDK](https://img.shields.io/badge/Geode-v5.10.1-orange.svg)](https://geode-sdk.org)
+[![GD Version](https://img.shields.io/badge/Geometry_Dash-2.2081-green.svg)](https://store.steampowered.com/app/322170/Geometry_Dash/)
 
-**OptiGD** is a high-performance optimization engine and frame-time stabilization mod for **Geometry Dash 2.2**, built on the **Geode** modding framework.
+**OptiGD** is a C++20 performance optimization engine and [Geode SDK](https://geode-sdk.org/) mod for **Geometry Dash 2.2081** across **Windows x64 (`Win64`)**, **Android 64-bit (`arm64-v8a`)**, and **Android 32-bit (`armeabi-v7a`)**.
 
-Designed from the ground up for modern GD 2.2 custom levels with 50,000 to 100,000+ objects, OptiGD replaces unoptimized linear algorithms with cache-friendly spatial indices, per-frame arena allocators, particle sleep governors, and an adaptive frame-time monitor to eliminate micro-stutters.
-
----
-
-## Performance Benchmark Matrix [SIMULATED]
-
-The following benchmarks were executed in the test environment comparing unoptimized vanilla Geometry Dash 2.2 algorithms against OptiGD v1.0.0:
-
-| Scenario | Baseline Mean (µs) | OptiGD Mean (µs) | Speedup | Baseline P99 (µs) | OptiGD P99 (µs) | Jitter Reduction |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Spatial Frustum Culling** (50k objects) | 229.6 µs | 12.6 µs | **18.3x** | 305.2 µs | 16.8 µs | **94.1%** |
-| **Transient Allocations** (1k allocs/frame) | 26.3 µs | 4.0 µs | **6.6x** | 41.5 µs | 6.2 µs | **57.7%** |
-| **Particle System Throttling** (20 emitters) | 18.2 µs | 4.0 µs | **4.5x** | 24.1 µs | 5.8 µs | **66.6%** |
-| **Trigger Dispatch & Lookahead** (2.5k triggers)| 2.2 µs | 0.2 µs | **13.3x** | 3.5 µs | 0.4 µs | **98.5%** |
-| **Full Frame Demon Simulation** (Integrated) | 151.5 µs | 22.3 µs | **6.8x** | 198.4 µs | 29.1 µs | **83.7%** |
-
-*Note: All benchmark scenario results are marked **[SIMULATED]**. The Adaptive Governor overhead is **1.027 µs/frame** **[MEASURED]** (< 0.01% of 60 FPS frame budget).*
+OptiGD targets the primary CPU and memory bottlenecks in high-object Geometry Dash levels—camera frustum visibility evaluation, off-screen particle simulation, affine transform recalculation, frame-time jitter, and per-frame temporary heap allocations—while preserving 100% of native player physics and collision determinism.
 
 ---
 
-## Key Features
+## Verification & Beta Status (`v0.1.0-beta1`)
 
-1. **2D Spatial Hash Frustum Culling**:
-   - Replaces $O(N)$ object checks with $O(k)$ spatial cell queries.
-   - Generational query stamps eliminate object duplication without dynamic memory allocation.
+OptiGD `v0.1.0-beta1` is the first validated beta candidate. Every optimization claim in this repository is labeled with its verification status (see [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md) for the complete module-by-module audit):
 
-2. **Per-Frame Bump Arena Allocator**:
-   - Pre-allocated 1 MB contiguous memory arena for scratch data, collision queries, and transient buffers.
-   - Eliminates heap fragmentation and `malloc`/`free` lock contention during gameplay.
-
-3. **Particle System Governor**:
-   - Sleeps offscreen emitters completely, saving CPU update and vertex quad preparation cycles.
-   - Preserves critical gameplay effects (player trail, portal glows) while scaling decorative density.
-   - Default profile is set to **LowEnd (High Performance)** for maximum stability on heavy demon levels.
-
-4. **Trigger Dispatch Optimizer**:
-   - Spatial sorting along the X-axis with forward lookahead windows.
-   - Automatically skips inactive, completed, and far-future triggers.
-
-5. **Deterministic Adaptive Governor**:
-   - Monitors real-time frame-rate and frame-time variance (EMA, P95, P99).
-   - Dynamically scales visual fidelity to maintain target frame rates (60Hz, 144Hz, 240Hz).
-   - Overhead: **< 1.1 µs per frame** (< 0.05% of frame budget).
-
-6. **Self-Disabling Fallback Manager**:
-   - Detects frame-time regressions and jitter spikes.
-   - Automatically downgrades aggressive features and logs reasons with hysteresis cooldown to prevent oscillation.
-
-7. **Zero Network Telemetry**:
-   - All performance diagnostics and telemetry are 100% local. No network calls are made.
+- **`[VERIFIED]`**: Core C++20 engine (`MemoryArena`, `SpatialHash`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, `MatrixCache`, `AdaptiveGovernor`, `FallbackManager`, `ConfigManager`, `CompatibilityLayer`, `DiagnosticsEngine`) passes 100% of unit and integration tests (`ctest`) and compiles into verified `.geode` binaries for **Windows x64**, **Android64**, and **Android32** using Geode SDK `v5.10.1`.
+- **`[SIMULATED]`**: Synthetic stress benchmarks (`optigd_benchmark`) demonstrate **2.36x – 6.51x** CPU reduction in standalone 4k–60k object simulation loops.
+- **`[UNVERIFIED / BLOCKED]`**: Live in-game Geometry Dash `2.2081` frame-time captures on physical Windows/Android hardware remain pending beta tester telemetry collection via the built-in `optigd_diagnostics.json` exporter and `tools/generate_report.py --compare`.
 
 ---
 
-## Directory Structure
+## Core Optimization Subsystems
 
-```
-OptiGD/
-├── .github/workflows/
-│   └── build.yml               # GitHub Actions CI: Windows & Android .geode builder
-├── src/
-│   ├── core/                   # MemoryArena, SpatialHash, Types, Logger, OptiGDManager
-│   ├── optimization/           # VisibilityCuller, ParticleGovernor, TriggerOptimizer, MatrixCache
-│   ├── adaptive/               # AdaptiveGovernor, FallbackManager
-│   ├── profiling/              # Low-overhead microsecond Profiler
-│   ├── diagnostics/            # DiagnosticsEngine, Local JSON summary exporter
-│   ├── compatibility/          # Geode & GD version gating, conflict resolution
-│   ├── config/                 # Profile presets (LowEnd, Balanced, HighEnd, Custom)
-│   ├── ui/                     # Diagnostics HUD overlay
-│   ├── platform/               # Multi-platform OS & system info layer
-│   ├── geode/                  # Geode $modify hooks (PlayLayer, CCNode, CCParticleSystemQuad)
-│   └── benchmark/              # Synthetic benchmark harness
-├── tests/                      # Unit & integration tests
-├── benchmarks/                 # Benchmark executable entry point
-├── tools/                      # Report generator scripts
-├── docs/                       # Architecture and benchmark specifications
-├── scripts/                    # Build and run scripts
-├── CMakeLists.txt              # Dual CMake build configuration
-├── mod.json                    # Geode mod metadata and settings schema
-├── CHANGELOG.md                # Release history
-├── EVIDENCE_REPORT.md          # Formal evidence report
-└── README.md
-```
+1. **2D Spatial Hash & Differential Frustum Culling (`SpatialHash` + `VisibilityCuller`)**:
+   - Indexes level objects in a flat 2D spatial hash grid (`128u` default cell size) with generational query stamps and incremental cell bucket re-indexing when objects move (`GJBaseGameLayer::updateObjectSection`).
+   - Uses per-frame `MemoryArena` scratch buffers and differential visibility tracking (`evaluateVisibilityDelta`) so only decorative objects entering or leaving the padded camera frustum are toggled (`O(k)` visible objects instead of `O(N)` total level objects).
+   - **Gameplay Safety**: Never hides non-decorative obstacles, portals, pads, orbs, or triggers, and respects GD's `m_isHide`, `m_isInvisible`, and `m_isDisabled` flags.
+
+2. **Particle System Governor (`ParticleGovernor`)**:
+   - Intercepts `cocos2d::CCParticleSystem::update(float dt)` during active gameplay.
+   - Puts continuous off-screen particle emitters to sleep while keeping **`Critical`** emitters (player icon trails) and **finite-duration / auto-remove** emitters active so burst lifetimes always finish cleanly.
+   - Stores each emitter's initial `baseEmissionRate` to apply non-compounding density scaling (`50%` in `LowEnd`, `75%` in `Balanced`, `100%` in `HighEnd`), and clamps `dt` while resetting `m_fEmitCounter` upon waking from sleep to prevent particle bursts.
+
+3. **Affine Transform Matrix Cache (`MatrixCache`)**:
+   - Caches `cocos2d::CCAffineTransform`-equivalent `3x2` matrices (`AffineMatrix`) keyed by node pointer and transform parameters (`posX`, `posY`, `rotation`, `scaleX`, `scaleY`, `anchor`).
+   - Supports explicit dirty invalidation (`markDirty`), recursive parent-to-child dirty propagation (`setParent`), and pointer eviction (`evict`) when objects are removed from sections.
+
+4. **Spatial & Group Trigger Indexer (`TriggerOptimizer`)**:
+   - Indexes triggers deterministically by `(triggerX, spawnOrder, id)` and by group ID, supporting `TouchOrPosition`, `TouchOnly` (hitbox intersection), `Spawn`, and `Continuous` semantics, `isMultiTriggered` re-firing, group toggles (`GJBaseGameLayer::toggleGroup`), and backward movement / level reset cursor rewind.
+   - **Safe Default**: Disabled by default (`enable-trigger-indexing = false`); when enabled in-game, runs non-destructive lookahead window inspection alongside native GD trigger execution.
+
+5. **Adaptive Frame-Time Governor & Safety Fallback Manager (`AdaptiveGovernor` + `FallbackManager`)**:
+   - Tracks a rolling 120-frame window of mean, median (`P50`), `P95`, `P99`, and standard deviation (`stdDevMs`) using `MemoryArena` scratch memory.
+   - Dynamically adjusts performance tiers (`HighEnd <-> Balanced <-> LowEnd`) with a 120-frame hysteresis cooldown (or locks to user parameters when set to `Custom`).
+   - Automatically triggers safety fallbacks on severe frame-time jitter or per-feature CPU budget overruns, and restores pre-fallback settings once frame times stabilize.
+
+6. **Local Diagnostics HUD & Comparative Telemetry Exporter (`DiagnosticsEngine` + `DiagnosticsOverlay`)**:
+   - Optional in-game HUD (`CCLabelBMFont`) and automatic JSON telemetry export (`optigd_diagnostics.json`) on level exit—100% local with zero network calls.
 
 ---
 
-## Building and Testing
+## Cross-Platform Geode Hook Architecture
 
-### 1. Building the Geode Mod (.geode) via GitHub Actions
-A GitHub Actions workflow (`.github/workflows/build.yml`) builds multi-platform `.geode` files automatically on push and pull request:
-- **Windows x64** (.dll)
-- **Android 32-bit & 64-bit** (.so)
-- Packaged multi-platform `.geode` artifact ready to run instantly in Geometry Dash.
+All hooks in `src/geode/Hooks.cpp` are compiled unconditionally across **Windows x64**, **Android64**, and **Android32**:
 
-### 2. Building Native Tests & Benchmarks Locally (Linux / macOS / Windows)
+| Hook Class | Target Method | Role |
+|---|---|---|
+| `GJBaseGameLayer` | `update(float dt)` | Drives `OptiGDManager::beginFrame()` / `endFrame()`, recording both wall-clock inter-frame time (`totalFrameTimeUs`) and update CPU time (`updateCpuTimeUs`). |
+| `GJBaseGameLayer` | `updateObjectSection(GameObject*)` | Marks moved object dirty in `MatrixCache` and re-indexes its world bounding box in `VisibilityCuller` / `SpatialHash`. |
+| `GJBaseGameLayer` | `removeObjectFromSection(GameObject*)` | Evicts removed object pointer from `MatrixCache`. |
+| `GJBaseGameLayer` | `spawnGroup(...)` / `toggleGroup(...)` | Synchronizes group spawn and group enable/disable state with `TriggerOptimizer`. |
+| `PlayLayer` | `init(...)` / `setupHasCompleted()` | Syncs mod settings, initializes level acceleration structures, and prepares sorted trigger indices. |
+| `PlayLayer` | `addObject(GameObject*)` | Registers level objects, triggers (`EffectGameObject`), and attached particle emitters. |
+| `PlayLayer` | `updateVisibility(float dt)` | Executes native `PlayLayer::updateVisibility(dt)`, then runs arena-backed differential decorative frustum culling when `enable-spatial-culling` is enabled. |
+| `PlayLayer` | `postUpdate(float dt)` | Updates lookahead trigger telemetry and refreshes the in-game `DiagnosticsOverlay` HUD. |
+| `PlayLayer` | `resetLevel()` / `onQuit()` | Rewinds trigger states on level reset and exports `optigd_diagnostics.json` on level exit. |
+| `CCParticleSystem` | `update(float dt)` | Evaluates `ParticleGovernor` off-screen sleep/wake state and non-compounding emission scaling. |
 
+---
+
+## Building & Running Tests Locally
+
+### 1. Standalone C++20 Engine, Unit Tests & Synthetic Benchmarks
 ```bash
-# Clone the repository
-git clone https://github.com/coderunknow/OptiGD.git
-cd OptiGD
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build --output-on-failure --verbose
+./build/optigd_benchmark benchmark_results.json
+python3 tools/generate_report.py benchmark_results.json
+```
 
-# Configure and build
-cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+### 2. Building the Geode Mod (`coderunknow.optigd.geode`)
+With the [Geode CLI](https://docs.geode-sdk.org/) and `GEODE_SDK` (`v5.10.1`) installed:
+```bash
+geode build
+```
 
-# Run unit & integration tests
-./build/optigd_tests
-
-# Run synthetic benchmarks
-./build/optigd_benchmark
+### 3. Capturing & Comparing Real-Game Telemetry
+```bash
+python3 tools/generate_report.py --compare baseline_diagnostics.json optigd_diagnostics.json
 ```
 
 ---
 
-## Reality Labeling & Methodology Notice
+## Documentation Index
 
-In compliance with reality-grounded engineering standards:
-- **[MEASURED]**: Benchmarks, compiler version, execution times, and adaptive governor overhead measured directly in this environment.
-- **[SIMULATED]**: Synthetic benchmarks modeling GD 2.2 algorithms and object loops.
-- **[PROJECTED]**: Estimated performance on various consumer GPU/CPU configurations.
-- **[UNVERIFIED]**: Real Geometry Dash 2.2 client frame-times (client execution requires an end-user GD installation not present in headless CI).
+- [`AGENT.md`](AGENT.md) — Durable project governance, build/validation requirements, and anti-fabrication rules.
+- [`DESIGN_LOG.md`](DESIGN_LOG.md) — Append-only engineering design log, audit findings, and verification record.
+- [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md) — Module-by-module verification table (`VERIFIED`, `PARTIAL`, `SIMULATED`, `UNVERIFIED`).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Detailed subsystem and Geode hook architecture.
+- [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) — Synthetic benchmark results and real-game telemetry comparison guide.
+- [`docs/RELEASE_WORKFLOW.md`](docs/RELEASE_WORKFLOW.md) — Multi-platform CI/CD and release pipeline documentation.
+- [`CHANGELOG.md`](CHANGELOG.md) — Release history for `v0.1.0-beta1`.

@@ -1,20 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
-
-project(OptiGD VERSION 1.0.0 LANGUAGES CXX)
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if ("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS" OR IOS)
-    set(CMAKE_OSX_ARCHITECTURES "arm64")
-else()
-    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
-endif()
+project(OptiGD VERSION 0.1.0 LANGUAGES CXX)
 
-# Core library source files
+set(OPTIGD_VERSION_STRING "0.1.0-beta1")
+
+# Collect core OptiGD source files (platform-agnostic C++20 engine)
 set(OPTIGD_CORE_SOURCES
     src/core/Logger.cpp
     src/core/MemoryArena.cpp
@@ -35,36 +29,55 @@ set(OPTIGD_CORE_SOURCES
     src/benchmark/BenchmarkSuite.cpp
 )
 
-# Geode Mod Target (only when GEODE_SDK is available)
-if (DEFINED ENV{GEODE_SDK} OR DEFINED GEODE_SDK)
-    if (NOT DEFINED GEODE_SDK)
-        set(GEODE_SDK $ENV{GEODE_SDK})
-    endif()
+# ---------------------------------------------------------------------------
+# Option A: Geode Mod Target (Activated when GEODE_SDK environment var exists)
+# ---------------------------------------------------------------------------
+if (DEFINED ENV{GEODE_SDK} AND NOT OPTIGD_STANDALONE_ONLY)
+    message(STATUS "Building OptiGD v${OPTIGD_VERSION_STRING} as a Geode SDK Mod using SDK at: $ENV{GEODE_SDK}")
 
-    message(STATUS "Configuring Geode Mod with SDK: ${GEODE_SDK}")
+    if ("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS" OR IOS)
+        set(CMAKE_OSX_ARCHITECTURES "arm64")
+    endif()
+    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
     add_library(${PROJECT_NAME} SHARED
         ${OPTIGD_CORE_SOURCES}
         src/geode/Hooks.cpp
     )
+
     target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        GEODE_IS_COMPILING=1
+        OPTIGD_VERSION="${OPTIGD_VERSION_STRING}"
+    )
 
-    add_subdirectory(${GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
+    add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
     setup_geode_mod(${PROJECT_NAME})
-else()
-    message(STATUS "Standalone build: building core library, test suite, and benchmark harness.")
 
-    find_package(Threads REQUIRED)
+# ---------------------------------------------------------------------------
+# Option B: Standalone Core, Unit Test Suite, & Benchmark Harness
+# ---------------------------------------------------------------------------
+else()
+    message(STATUS "Building OptiGD v${OPTIGD_VERSION_STRING} Standalone Engine, Unit Tests, and Benchmark Harness")
 
     add_library(optigd_core STATIC ${OPTIGD_CORE_SOURCES})
-    target_link_libraries(optigd_core PUBLIC Threads::Threads)
-    target_include_directories(optigd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_include_directories(optigd_core PUBLIC src)
+    target_compile_definitions(optigd_core PUBLIC OPTIGD_VERSION="${OPTIGD_VERSION_STRING}")
 
+    if (MSVC)
+        target_compile_definitions(optigd_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_compile_options(optigd_core PRIVATE /W4 /O2 /permissive-)
+    else()
+        target_compile_options(optigd_core PRIVATE -Wall -Wextra -Wpedantic -O3)
+    endif()
+
+    # Unit & Integration Tests
+    enable_testing()
     add_executable(optigd_tests tests/UnitTests.cpp)
     target_link_libraries(optigd_tests PRIVATE optigd_core)
-    target_include_directories(optigd_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME OptiGDUnitTests COMMAND optigd_tests)
 
+    # Benchmark Harness
     add_executable(optigd_benchmark benchmarks/main.cpp)
     target_link_libraries(optigd_benchmark PRIVATE optigd_core)
-    target_include_directories(optigd_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 endif()

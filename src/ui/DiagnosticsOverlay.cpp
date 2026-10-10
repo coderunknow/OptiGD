@@ -9,52 +9,39 @@ DiagnosticsOverlay& DiagnosticsOverlay::instance() {
     return s_instance;
 }
 
-std::vector<std::string> DiagnosticsOverlay::formatOverlayLines(
-    const adaptive::AdaptiveGovernor& governor,
-    const diagnostics::DiagnosticsSummary& summary) const {
+std::string DiagnosticsOverlay::formatOverlayText(
+    const core::FrameStats& latestFrame,
+    const adaptive::WindowStats& windowStats,
+    const core::OptiConfig& config) const {
 
-    std::vector<std::string> lines;
-    std::ostringstream ss;
-    ss << std::fixed << std::setprecision(1);
-
-    // Line 1: FPS & Frame Time
-    ss << "OptiGD v1.0.0 | " << summary.averageFps << " FPS ("
-       << summary.meanFrameTimeMs << " ms, jitter: " << summary.frameTimeStdDevMs << " ms)";
-    lines.push_back(ss.str());
-
-    // Line 2: Tier & Adaptation
-    ss.str("");
-    ss.clear();
-    ss << "Tier: " << core::tierToString(summary.activeTier);
-    if (governor.isDynamicAdaptationEnabled()) {
-        ss << " [Adaptive]";
-    }
-    if (summary.fallbacksTriggered > 0) {
-        ss << " [Fallbacks: " << summary.fallbacksTriggered << "]";
-    }
-    lines.push_back(ss.str());
-
-    // Line 3: Culling & Allocations
-    ss.str("");
-    ss.clear();
-    ss << "Culling: " << (summary.averageCullingRatio * 100.0) << "% culled ("
-       << summary.totalObjectsCulled << "/" << summary.totalObjectsSeen << ") | "
-       << "Avoided Allocs: " << summary.totalHeapAllocsAvoided;
-    lines.push_back(ss.str());
-
-    return lines;
-}
-
-std::string DiagnosticsOverlay::getSingleLineSummary(
-    const adaptive::AdaptiveGovernor& governor,
-    const diagnostics::DiagnosticsSummary& summary) const {
+    if (!m_enabled) return "";
 
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(1);
-    ss << "OptiGD: " << summary.averageFps << " FPS | "
-       << summary.meanFrameTimeMs << "ms | "
-       << "Tier: " << core::tierToString(summary.activeTier) << " | "
-       << (summary.averageCullingRatio * 100.0) << "% culled";
+    ss << "[OptiGD v" << core::kOptiGDVersion << " Diagnostics]\n";
+    ss << "FPS: " << windowStats.fps
+       << " | Mean: " << windowStats.meanMs << "ms"
+       << " | P50: " << windowStats.medianMs << "ms"
+       << " | P95: " << windowStats.p95Ms << "ms"
+       << " | P99: " << windowStats.p99Ms << "ms\n";
+    ss << "Update CPU: " << (latestFrame.updateCpuTimeUs / 1000.0) << "ms"
+       << " | OptiGD Overhead: " << latestFrame.optigdOverheadUs << "us\n";
+    ss << "Tier: " << core::tierToString(config.tier)
+       << " (Target: " << config.targetFrameRate << " FPS)\n";
+    ss << "Objects: " << latestFrame.visibleObjects << " vis / "
+       << latestFrame.culledObjects << " culled ("
+       << latestFrame.totalObjects << " total, +"
+       << latestFrame.newlyVisibleObjects << "/-"
+       << latestFrame.newlyCulledObjects << " delta)\n";
+    ss << "Particles: " << latestFrame.activeParticles << " active / "
+       << latestFrame.culledParticles << " avoided (Scale: "
+       << static_cast<int>(config.particleDensityScale * 100.0f) << "%)\n";
+    ss << "Triggers: " << latestFrame.evaluatedTriggers << " eval / "
+       << latestFrame.executedTriggers << " exec ("
+       << latestFrame.totalTriggers << " total)\n";
+    ss << "Arena: " << (latestFrame.arenaUsedBytes / 1024) << " KB used | "
+       << latestFrame.heapAllocationsAvoided << " heap allocs avoided";
+
     return ss.str();
 }
 

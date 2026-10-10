@@ -3,51 +3,48 @@
 #include "../core/Types.hpp"
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <cstddef>
 
 namespace optigd::benchmark {
 
-struct BenchmarkMetricResult {
-    std::string name;
+struct BenchmarkResult {
+    std::string scenarioName;
+    size_t objectCount{0};
+    size_t emitterCount{0};
+    size_t triggerCount{0};
+    size_t framesSimulated{0};
+
+    // Baseline (Unoptimized O(N) traversal + heap allocations)
     double baselineMeanUs{0.0};
-    double optigdMeanUs{0.0};
-    double speedupFactor{1.0};
-
+    double baselineMedianUs{0.0};
     double baselineP95Us{0.0};
-    double optigdP95Us{0.0};
-
     double baselineP99Us{0.0};
+    uint64_t baselineAllocations{0};
+
+    // OptiGD (Spatial Hash + Particle Governor + Trigger Indexer + Arena)
+    double optigdMeanUs{0.0};
+    double optigdMedianUs{0.0};
+    double optigdP95Us{0.0};
     double optigdP99Us{0.0};
+    uint64_t optigdHeapAllocations{0};
+    uint64_t optigdArenaAllocations{0};
 
-    double baselineStdDevUs{0.0};
-    double optigdStdDevUs{0.0};
-
-    double baselineSimulatedFps{0.0};
-    double optigdSimulatedFps{0.0};
-
-    std::string notes;
-};
-
-struct BenchmarkSuiteResult {
-    std::string testEnvironment;
-    std::vector<BenchmarkMetricResult> scenarios;
-    double adaptiveGovernorOverheadUs{0.0};
-    double memoryArenaAllocationSpeedup{0.0};
+    double speedupFactor{1.0};
+    double cpuReductionPercent{0.0};
 };
 
 class BenchmarkSuite {
 public:
-    static BenchmarkSuiteResult runAllBenchmarks(size_t objectCount = 50000, size_t frameCount = 300);
+    static std::vector<BenchmarkResult> runAllBenchmarks();
+    static BenchmarkResult runScenario(const std::string& name,
+                                       size_t numObjects,
+                                       size_t numEmitters,
+                                       size_t numTriggers,
+                                       size_t numFrames);
 
-    static BenchmarkMetricResult runCullingBenchmark(size_t objectCount, size_t frameCount);
-    static BenchmarkMetricResult runMemoryBenchmark(size_t allocsPerFrame, size_t frameCount);
-    static BenchmarkMetricResult runParticleBenchmark(size_t emitterCount, size_t frameCount);
-    static BenchmarkMetricResult runTriggerBenchmark(size_t triggerCount, size_t frameCount);
-    static BenchmarkMetricResult runIntegratedBenchmark(size_t objectCount, size_t particleCount, size_t triggerCount, size_t frameCount);
-
-    static double measureGovernorOverhead(size_t iterations = 10000);
-
-    static void printResultsTable(const BenchmarkSuiteResult& result);
-    static std::string exportMarkdownReport(const BenchmarkSuiteResult& result);
+    static std::string formatMarkdownReport(const std::vector<BenchmarkResult>& results);
+    static std::string formatJsonReport(const std::vector<BenchmarkResult>& results);
 };
 
 } // namespace optigd::benchmark

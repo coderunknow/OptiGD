@@ -1,81 +1,140 @@
-name: Build Geode Mod
+name: Build & Verify OptiGD
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [ main, master, "arena/**" ]
   pull_request:
-    branches:
-      - "**"
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  test:
-    name: Native Verification & Benchmark
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Build Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build build-essential
-
-      - name: Configure CMake
-        run: cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build Test & Benchmark Harness
-        run: cmake --build build --verbose
-
-      - name: Run Unit Tests
-        run: |
-          chmod +x build/optigd_tests
-          ./build/optigd_tests
-
-      - name: Run Synthetic Benchmarks
-        run: |
-          chmod +x build/optigd_benchmark
-          ./build/optigd_benchmark
-
-  build:
-    name: Build ${{ matrix.config.name }}
-    runs-on: ${{ matrix.config.os }}
+  # ==========================================================================
+  # Job 1: Standalone C++20 Core Engine, Unit Tests, & Benchmark Verification
+  # ==========================================================================
+  standalone-test-and-benchmark:
+    name: Core Engine Tests & Benchmarks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        config:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake (Standalone Mode)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON
+
+      - name: Build Core Engine, Tests & Benchmark Suite
+        run: cmake --build build --config Release --parallel
+
+      - name: Run Unit & Integration Tests
+        run: ctest --test-dir build -C Release --output-on-failure --verbose
+
+      - name: Run Performance Benchmark Suite
+        shell: bash
+        run: |
+          if [ -f "./build/Release/optigd_benchmark.exe" ]; then
+            ./build/Release/optigd_benchmark.exe benchmark_results.json
+          elif [ -f "./build/optigd_benchmark.exe" ]; then
+            ./build/optigd_benchmark.exe benchmark_results.json
+          else
+            ./build/optigd_benchmark benchmark_results.json
+          fi
+
+      - name: Verify Benchmark & Version Metadata
+        shell: bash
+        run: |
+          jq -e '.optigd_version == "0.1.0-beta1"' benchmark_results.json
+          jq -e '.evidence_classification == "[SIMULATED]"' benchmark_results.json
+          python3 tools/generate_report.py benchmark_results.json
+
+      - name: Upload Benchmark Telemetry Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: optigd-benchmark-${{ matrix.os }}
+          path: benchmark_results.json
+
+  # ==========================================================================
+  # Job 2: Geode SDK Cross-Platform Mod Compilation (Win64, Android32, Android64)
+  # ==========================================================================
+  build-geode-mod:
+    name: Geode Mod (${{ matrix.name }})
+    needs: standalone-test-and-benchmark
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - name: Windows x64
             os: windows-latest
             target: Win64
-
-          - name: Android 32-bit
-            os: ubuntu-latest
-            target: Android32
-
-          - name: Android 64-bit
+            expected_bin: coderunknow.optigd.dll
+          - name: Android64 (arm64-v8a)
             os: ubuntu-latest
             target: Android64
+            expected_bin: coderunknow.optigd.android64.so
+          - name: Android32 (armeabi-v7a)
+            os: ubuntu-latest
+            target: Android32
+            expected_bin: coderunknow.optigd.android32.so
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Build the mod
+      - name: Build Geode Mod Package
+        id: build
         uses: geode-sdk/build-geode-mod@main
         with:
-          sdk: latest
+          sdk: given
           combine: true
-          target: ${{ matrix.config.target }}
+          target: ${{ matrix.target }}
+          build-config: Release
 
-  package:
-    name: Package Combined .geode
+      - name: Verify Platform .geode Package Contents
+        shell: bash
+        run: |
+          GEODE_FILE="${{ steps.build.outputs.build-output }}/coderunknow.optigd.geode"
+          if [ ! -f "$GEODE_FILE" ]; then
+            echo "ERROR: Expected .geode package not found at $GEODE_FILE"
+            exit 1
+          fi
+          unzip -l "$GEODE_FILE"
+          unzip -l "$GEODE_FILE" | grep -F "${{ matrix.expected_bin }}"
+          unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta1"'
+          unzip -p "$GEODE_FILE" mod.json | jq -e '.id == "coderunknow.optigd"'
+
+  # ==========================================================================
+  # Job 3: Combine Multi-Platform .geode Package & Verify Combined Archive
+  # ==========================================================================
+  combine:
+    name: Package Combined .geode Artifact
+    needs: build-geode-mod
     runs-on: ubuntu-latest
-    needs: ['build']
     steps:
-      - uses: geode-sdk/build-geode-mod/combine@main
-        id: build
+      - name: Combine Platform Binaries
+        id: combine
+        uses: geode-sdk/build-geode-mod/combine@main
 
-      - name: Upload .geode Artifact
-        uses: actions/upload-artifact@v4
+      - name: Verify Combined Multi-Platform .geode Archive
+        shell: bash
+        run: |
+          COMBINED_FILE="${{ steps.combine.outputs.build-output }}/coderunknow.optigd.geode"
+          if [ ! -f "$COMBINED_FILE" ]; then
+            echo "ERROR: Combined .geode file missing at $COMBINED_FILE"
+            exit 1
+          fi
+          echo "=== Combined .geode Archive Contents ==="
+          unzip -l "$COMBINED_FILE"
+          unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.dll"
+          unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android64.so"
+          unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android32.so"
+          unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta1"'
+
+      - name: Upload Combined .geode Mod
+        uses: actions/upload-artifact@v7
         with:
-          name: coderunknow.optigd.geode
-          path: ${{ steps.build.outputs.build-output }}
+          name: coderunknow.optigd-geode-package
+          path: ${{ steps.combine.outputs.build-output }}/*.geode
