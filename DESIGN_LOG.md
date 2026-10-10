@@ -254,11 +254,44 @@ aggregate-initialized.**
   `AGENT.md`); `docs/BENCHMARKS.md` numbers came from the rebuilt binary, not
   hand-editing.
 
-### 5.7 Open items / blockers
+### 5.7 CI verification (PR #6, run `38060134568`, commit `03ec664`)
 
-1. **Multi-platform `.geode` CI matrix** had not completed at the time of
-   writing; results go in `EVIDENCE_REPORT.md` §7 once available.
-2. **Live in-game validation remains `BLOCKED`.** No Geometry Dash `2.2081`
+All 6 jobs passed:
+
+| Job | ID | Result |
+|---|---|---|
+| `Core Engine Tests & Benchmarks (ubuntu-latest)` | `114236537673` | PASS |
+| `Core Engine Tests & Benchmarks (windows-latest)` | `114236537804` | PASS |
+| `Geode Mod (Windows x64)` | `114236820940` | PASS |
+| `Geode Mod (Android64 (arm64-v8a))` | `114236820916` | PASS |
+| `Geode Mod (Android32 (armeabi-v7a))` | `114236820910` | PASS |
+| `Package Combined .geode Artifact` | `114237310787` | PASS (470,639 bytes) |
+
+The packaging jobs are hard-gated on `jq -e '.version == "v0.1.0-beta.2"'` and
+`jq -e '.id == "coderunknow.optigd"'` run against `mod.json` extracted from inside
+the built `.geode`, and the combined job greps for all three binaries. That is the
+packaging-level half of the loading-defect fix.
+
+Two caveats recorded honestly:
+
+1. `Kilo Code Review` reports `action_required` — *"Review could not start because
+   the account has insufficient credits."* That is a billing condition on a
+   third-party service, not a code finding. `CodeRabbit` passed.
+2. The combined artifact could not be downloaded into this environment (egress is
+   restricted to `github.com`, `codeload.github.com`, `api.github.com`,
+   `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`; the artifact is
+   hosted on `*.blob.core.windows.net`). CI job logs are likewise unreachable
+   (`results-receiver.actions.githubusercontent.com`). The archive contents are
+   therefore attested by CI's own in-archive assertions, not by an independent
+   local re-inspection.
+
+### 5.8 Open items / blockers
+
+1. **Live in-game validation remains `BLOCKED`.** No Geometry Dash `2.2081`
    binary, GPU context, or Geode loader in this environment. The beta.1 → beta.2
-   version fix is proven at the grammar and packaging level only; a hardware
-   tester must still confirm the mod appears and runs in game.
+   version fix is proven at the grammar level (extracted-grammar harness), at the
+   unit-test level, and at the packaging level (CI `jq` gates on the shipped
+   archive) — but **not** by observing the mod load in a real client. A hardware
+   tester must still confirm the mod appears and runs in game. This is the one
+   criterion that cannot be closed from here, and it is left open rather than
+   reported as a pass.

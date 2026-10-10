@@ -173,18 +173,35 @@ Test inventory (19): `testMemoryArena`, `testSpatialHash`, `testVisibilityCuller
 
 ---
 
-## 7. Multi-Platform CI Build & Package Verification
+## 7. Multi-Platform CI Build & Package Verification `[VERIFIED]`
 
-| CI Job | Runner / Toolchain | Target | Verification Checks | Status |
-|---|---|---|---|---|
-| `Core Engine Tests & Benchmarks (ubuntu-latest)` | Ubuntu Linux x86_64 (GCC) | Standalone C++20 | `ctest` (4/4 suites incl. 20/20 tests), `optigd_benchmark`, `jq` version & `[SIMULATED]` checks, `tools/generate_report.py`, metadata validation | **PENDING / NOT RUN at time of writing** — see §8 |
-| `Core Engine Tests & Benchmarks (windows-latest)` | Windows Server x64 (MSVC) | Standalone C++20 | as above | **PENDING / NOT RUN at time of writing** |
-| `Geode Mod (Windows x64)` | Windows Server x64 (`clang++` MSVC ABI + Geode SDK `5.10.1`) | `Win64` | `coderunknow.optigd.dll` and `mod.json` (`v0.1.0-beta.2`) inside the `.geode` archive | **PENDING / NOT RUN at time of writing** |
-| `Geode Mod (Android64 (arm64-v8a))` | Ubuntu + Android NDK (`aarch64-none-linux-android23`) | `Android64` | `coderunknow.optigd.android64.so` and `mod.json` (`v0.1.0-beta.2`) | **PENDING / NOT RUN at time of writing** |
-| `Geode Mod (Android32 (armeabi-v7a))` | Ubuntu + Android NDK (`armv7a-linux-androideabi23`) | `Android32` | `coderunknow.optigd.android32.so` and `mod.json` (`v0.1.0-beta.2`) | **PENDING / NOT RUN at time of writing** |
-| `Package Combined .geode Artifact` | Ubuntu + `geode-sdk/build-geode-mod/combine` | Multi-platform `.geode` | Combined archive contains all three binaries plus `mod.json` (`v0.1.0-beta.2`) | **PENDING / NOT RUN at time of writing** |
+Verified on GitHub Actions workflow **`Build & Verify OptiGD`**, run **`38060134568`**, branch
+`arena/0d1622f9-optigd`, commit `03ec664` (PR #6). **All 6 jobs passed.**
 
-The equivalent matrix **passed** for `v0.1.0-beta1` (workflow run `38045635961`, branch `arena/3343543c-optigd`), which establishes that the toolchain itself works; however, `v0.1.0-beta1`'s packaging was the thing that was broken, and a `beta1` build passing CI is exactly why the metadata gate in §2.5 was added. The `v0.1.0-beta.2` run results will be recorded here once CI completes.
+| CI Job | Job ID | Runner / Toolchain | Target | Verification Checks | Status |
+|---|---|---|---|---|---|
+| `Core Engine Tests & Benchmarks (ubuntu-latest)` | `114236537673` | Ubuntu Linux x86_64 (GCC) | Standalone C++20 | `ctest` (4/4 suites incl. 20/20 tests), `optigd_benchmark`, `jq -e '.optigd_version == "0.1.0-beta.2"'`, `jq -e '.evidence_classification == "[SIMULATED]"'`, `tools/generate_report.py` | **PASSED (`[VERIFIED]`)** |
+| `Core Engine Tests & Benchmarks (windows-latest)` | `114236537804` | Windows Server x64 (MSVC) | Standalone C++20 | as above | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Windows x64)` | `114236820940` | Windows Server x64 (`clang++` MSVC ABI + Geode SDK `5.10.1`) | `Win64` | `coderunknow.optigd.dll` present in archive; `jq -e '.version == "v0.1.0-beta.2"'`; `jq -e '.id == "coderunknow.optigd"'` | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android64 (arm64-v8a))` | `114236820916` | Ubuntu + Android NDK (`aarch64-none-linux-android23`) | `Android64` | `coderunknow.optigd.android64.so` present; `jq -e '.version == "v0.1.0-beta.2"'`; `jq -e '.id == "coderunknow.optigd"'` | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android32 (armeabi-v7a))` | `114236820910` | Ubuntu + Android NDK (`armv7a-linux-androideabi23`) | `Android32` | `coderunknow.optigd.android32.so` present; `jq -e '.version == "v0.1.0-beta.2"'`; `jq -e '.id == "coderunknow.optigd"'` | **PASSED (`[VERIFIED]`)** |
+| `Package Combined .geode Artifact` | `114237310787` | Ubuntu + `geode-sdk/build-geode-mod/combine` | Multi-platform `.geode` | Combined `coderunknow.optigd.geode` (**470,639 bytes**) contains all three binaries and `mod.json` with `v0.1.0-beta.2` | **PASSED (`[VERIFIED]`)** |
+
+These `jq -e` assertions are hard gates: a mismatch fails the job. So the shipped
+archive is proven to declare `v0.1.0-beta.2`, which is the packaging-level half of
+the loading-defect fix.
+
+**Third-party review bots**: `CodeRabbit` passed. `Kilo Code Review` reports
+`action_required` with the summary *"Review could not start because the account has
+insufficient credits"* — an account/billing condition on an external service, not a
+finding against this code. No changes were made in response to it.
+
+**Not re-downloaded**: the combined artifact could not be fetched into this
+environment (network egress is restricted to `github.com`, `codeload.github.com`,
+`api.github.com`, `registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`; the
+artifact lives on `*.blob.core.windows.net`). The verification above therefore
+rests on the CI job's own in-archive assertions rather than an independent local
+re-inspection of the downloaded zip. This is stated rather than papered over.
 
 ---
 
@@ -195,9 +212,10 @@ The equivalent matrix **passed** for `v0.1.0-beta1` (workflow run `38045635961`,
 | `v0.1.0-beta1` failed to load because of the `mod.json` version string | **PASS** (`[VERIFIED]` statically + `[MEASURED]` dynamically) |
 | `v0.1.0-beta.2` is accepted by Geode `5.10.1`'s `VersionInfo` grammar | **PASS** (`[MEASURED]` via extracted-grammar harness + ported implementation) |
 | `mod.json` / `Types.hpp` / `CMakeLists.txt` / CI version strings are consistent | **PASS** (`[MEASURED]` via `tools/validate_geode_metadata.py`) |
-| 20/20 unit & integration tests pass; clean under ASan/UBSan | **PASS** (`[MEASURED]`) |
+| 20/20 unit & integration tests pass; clean under ASan/UBSan | **PASS** (`[MEASURED]` locally, and `[VERIFIED]` on both `ubuntu-latest` and `windows-latest` CI) |
 | Both JSON artefacts are schema-valid | **PASS** (`[MEASURED]`) |
+| `mod.json` in the shipped archive declares `v0.1.0-beta.2` | **PASS** (`[VERIFIED]` via CI `jq -e` gates) |
 | Synthetic benchmarks show 4.19x–5.45x reduction with 0 per-frame heap allocations | **PASS** (`[SIMULATED]`) |
-| Multi-platform `.geode` builds (Win64 / Android32 / Android64) | **PENDING** — CI matrix result recorded in §7 once available |
+| Multi-platform `.geode` builds (Win64 / Android32 / Android64) | **PASS** (`[VERIFIED]`) — 6/6 CI jobs, run `38060134568`, all three binaries + `mod.json` `v0.1.0-beta.2` |
 | The mod loads and runs inside a real Geometry Dash `2.2081` client | **BLOCKED** — no GD binary, GPU context, or Geode loader in this environment |
 | Any improvement in live in-game frame rate | **NOT CLAIMED / UNVERIFIED** — no in-game capture exists; none is implied by the `[SIMULATED]` numbers |
