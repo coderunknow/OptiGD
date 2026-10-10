@@ -1,10 +1,15 @@
 #include "Platform.hpp"
-#include <thread>
+#include <algorithm>
+#include <cstddef>
 #include <fstream>
-#include <sstream>
+#include <string>
+#include <thread>
 
 #if defined(_WIN32) || defined(_WIN64)
     #define OPTIGD_OS_WINDOWS 1
+    #ifndef NOMINMAX
+    #define NOMINMAX 1
+    #endif
     #include <windows.h>
     #include <psapi.h>
     #pragma comment(lib, "psapi.lib")
@@ -16,6 +21,7 @@
     #include <unistd.h>
 #elif defined(__APPLE__)
     #define OPTIGD_OS_APPLE 1
+    #include <TargetConditionals.h>
     #include <unistd.h>
     #include <mach/mach.h>
 #else

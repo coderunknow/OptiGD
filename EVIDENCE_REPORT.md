@@ -1,181 +1,153 @@
-# OptiGD v1.0.0 — Mandatory Evidence Report
+# OptiGD v0.1.0-beta1 — Evidence Report
 
-**Document Date:** 2026-09-15  
-**Version:** v1.0.0  
-**Target Mod Loader:** Geode SDK (>= v4.0.0)  
-**Target Game:** Geometry Dash 2.2081 (Windows, Android, macOS, iOS)
+**Release identifier:** `v0.1.0-beta1` (git tag / prose). **Geode version:** `v0.1.0-beta.1` (`mod.json`).
+**Native version:** `0.1.0` (`CMakeLists.txt`). **Target game:** Geometry Dash 2.2081.
+**Targets:** Windows x64, Android32, Android64. **Geode SDK:** 5.10.1 (`mod.json`).
 
----
-
-## 1. Reality Constraint Statement & Environment
-
-### Labeling Conventions
-- **[MEASURED]**: Directly executed and recorded in this sandbox environment.
-- **[SIMULATED]**: Synthetic microbenchmark scenarios modeling GD 2.2 algorithms and workloads.
-- **[PROJECTED]**: Reasoned engineering projections, not directly measured on consumer game clients.
-- **[UNVERIFIED]**: Could not be executed or verified in this environment; stated plainly below.
-
-### Test Environment Specification [MEASURED]
-- **Operating System**: Linux 6.1.158+ x86_64 (Debian GNU/Linux 12 bookworm)
-- **CPU Cores**: 2 Logical Cores (AMD EPYC / Intel Xeon hypervisor)
-- **Compiler**: GCC 12.2.0 (`/usr/bin/c++`) with `-std=c++20 -O3`
-- **Build System**: CMake 4.4.3, Ninja 1.13.2
-- **Memory**: 63,944 MB Host RAM
-- **Git State**: Clean branch `arena/01a0a360-optigd`
-
-### What Could NOT Be Verified in this Environment [UNVERIFIED]
-> **Real gameplay frame-times could not be checked in this environment because the proprietary Geometry Dash 2.2 client binary, graphics display server, and real end-user hardware are not present in this headless Linux sandbox.**
-
-Real-world end-user FPS deltas and frame-time pacing remain an open gate requiring human-in-the-loop or end-user testing on a running client. No real client numbers have been fabricated.
+This report records what was checked, how, and what was not. It supersedes the v1.0.0 report, whose
+simulated speed-up figures were not measurements and have been removed.
 
 ---
 
-## 2. What Was Built
+## 1. Status legend
 
-A greenfield, fully modular performance mod and engine architecture for Geometry Dash 2.2:
+| Status | Meaning |
+|---|---|
+| **VERIFIED** | Behaviour specified for the module is checked by automated tests that pass in this repository. Says nothing about the game. |
+| **PARTIAL** | Some behaviour is verified, and part of the path is implemented but not checked (usually the game-facing part). |
+| **DISABLED** | Code exists, but it is off by default, and/or it is not connected to gameplay in this release. |
+| **UNVERIFIED** | Claimed behaviour has no automated test that passes and no runtime evidence. |
 
-1. **`src/core/`**:
-   - `MemoryArena`: Linear bump allocator with O(1) frame reset for scratch buffers.
-   - `SpatialHash`: 2D spatial hash grid with $O(1)$ generational query stamp deduplication.
-   - `Logger`: Local ring-buffer logging without network dependencies.
-   - `OptiGDManager`: Central coordinator for per-frame lifecycle management.
-2. **`src/optimization/`**:
-   - `VisibilityCuller`: Fast camera frustum culling replacing $O(N)$ linear scans with $O(k)$ cell queries.
-   - `ParticleGovernor`: Offscreen particle emitter sleep mode and dynamic density throttling. Default profile: **LowEnd (High Performance)** per configuration.
-   - `TriggerOptimizer`: Spatial sorting and lookahead window dispatch for level triggers.
-   - `MatrixCache`: Affine transformation matrix caching for static/unmodified nodes.
-3. **`src/adaptive/`**:
-   - `AdaptiveGovernor`: Rolling window frame-time monitor with deterministic tier transitions.
-   - `FallbackManager`: Hysteresis-protected regression detection and self-downgrading.
-4. **`src/profiling/`**:
-   - `Profiler`: Sub-microsecond RAII profiling markers.
-5. **`src/diagnostics/`**:
-   - `DiagnosticsEngine`: Frame-time history, spike detection, and local JSON summary generation.
-6. **`src/compatibility/`**:
-   - `CompatibilityLayer`: Feature gating and conflict handling.
-7. **`src/config/`**:
-   - `ConfigManager`: Presets for LowEnd (default), Balanced, HighEnd, and Custom profiles.
-8. **`src/platform/`**:
-   - `Platform`: Hardware inspection, timestamping, and memory usage queries.
-9. **`src/ui/`**:
-   - `DiagnosticsOverlay`: Live HUD performance statistics overlay.
-10. **`src/geode/`**:
-    - Geode `$modify` hooks for `PlayLayer`, `CCNode`, and `CCParticleSystemQuad`.
-11. **Continuous Integration**:
-    - `.github/workflows/build.yml`: Builds Windows x64 and Android (Android32 & Android64) `.geode` package artifacts via `geode-sdk/build-geode-mod` with automatic combine packaging.
+Each row also states **Game connection** (what the game actually runs) and **Runtime evidence** (what
+has been observed in Geometry Dash). No row has runtime evidence yet.
+
+Build labels: **BUILD-VERIFIED** = the artifact was produced by CI. **RUNTIME-UNVERIFIED** = the
+artifact was not run in the game.
 
 ---
 
-## 3. Architecture & Design Rationale
+## 2. Module table
 
-Geometry Dash 2.2 custom levels frequently push between 40,000 and 100,000+ objects into a single level. Cocos2d-x was originally designed for mobile games with hundreds of nodes. When scaling to 100,000 objects:
-1. **Frustum Culling**: Iterating 100k objects linearly every frame requires millions of matrix and bounding box evaluations per second. By subdividing space into a 2D spatial hash, only the objects located within camera-intersecting cells are examined.
-2. **Heap Thrashing**: Allocating scratch memory with `malloc`/`free` or `std::vector` inside the per-frame update loop causes mutex contention inside the CRT allocator and heap fragmentation. `MemoryArena` provides instant bump allocation with zero syscalls during the active frame.
-3. **Particle Updates**: Heavy levels feature dozens of particle systems. Emitters outside the camera viewport are placed into sleep mode, preventing redundant physics integration and vertex buffer copying.
-4. **Trigger Processing**: Linear scans over 2,500+ triggers are replaced by an ordered cursor that skips past completed triggers and far-future triggers in $O(1)$.
-5. **Adaptive Governor**: Maintains strict frame pacing by dynamically adjusting non-essential fidelity under heavy load, with cooldown hysteresis preventing oscillation.
-
----
-
-## 4. Benchmark Results & Variance Analysis
-
-All benchmarks below were executed in this environment with 300 to 500 frames and multiple iterations.
-
-### Summary Table
-
-| Scenario | Baseline Mean (µs) | OptiGD Mean (µs) | Speedup Factor | Baseline P99 (µs) | OptiGD P99 (µs) | Jitter Reduction | Metric Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Spatial Frustum Culling** (50,000 objects) | 229.6 µs | 12.6 µs | **18.3x** | 305.2 µs | 16.8 µs | **94.1%** | [SIMULATED] |
-| **Transient Allocations** (1,000 allocs/frame) | 26.3 µs | 4.0 µs | **6.6x** | 41.5 µs | 6.2 µs | **57.7%** | [SIMULATED] |
-| **Particle System Throttling** (20 emitters) | 18.2 µs | 4.0 µs | **4.5x** | 24.1 µs | 5.8 µs | **66.6%** | [SIMULATED] |
-| **Trigger Dispatch & Lookahead** (2,500 triggers)| 2.2 µs | 0.2 µs | **13.3x** | 3.5 µs | 0.4 µs | **98.5%** | [SIMULATED] |
-| **Full Frame Demon Simulation** (Integrated) | 151.5 µs | 22.3 µs | **6.8x** | 198.4 µs | 29.1 µs | **83.7%** | [SIMULATED] |
-
-### Adaptive Governor Overhead [MEASURED]
-- **Measured Execution Time**: **1.027 µs/frame** (measured across 10,000 iterations).
-- **Impact on 60 FPS Frame Budget (16,666 µs)**: **0.006%**
-- **Impact on 240 FPS Frame Budget (4,166 µs)**: **0.024%**
-- **Conclusion**: The adaptive system overhead is negligible and completely imperceptible in real gameplay.
+| # | Module | Status | Default | Game connection | Native evidence | Missing before it can be stronger |
+|---|---|---|---|---|---|---|
+| 1 | `core/MemoryArena` | VERIFIED | ON (counters only) | Per-frame counters; no game allocation is redirected | 4 tests incl. alignment and overflow regressions | Nothing for the stated scope. Not used as an allocator for game objects. |
+| 2 | `core/SpatialHash` | VERIFIED | ON (inside culler) | Used by `VisibilityCuller` | 4 tests incl. moved-item and non-finite regressions | Performance at 100k+ objects on device (protocol) |
+| 3 | `optimization/VisibilityCuller` | PARTIAL | Shadow only (`enable-culling` OFF) | `OptiPlayLayer::postUpdate` runs a shadow pass when enabled; **no object is hidden or skipped** | 3 tests (counts, update, unregister) | (a) `m_objects` enumeration is UNVERIFIED against bindings (see §4); (b) camera-rectangle conversion is UNVERIFIED in-game |
+| 4 | `optimization/ParticleGovernor` | DISABLED | OFF | **Not connected** to any particle system | 5 tests (critical never throttled, hysteresis band, no wake burst, incremental totals, budget) | Connection to `CCParticleSystem` (win/android link) and in-game sleep/wake verification |
+| 5 | `optimization/TriggerOptimizer` | DISABLED | OFF | **Not connected**. Model only: it does not reproduce GD's trigger pipeline (`checkCollisions`, `processCommands`) | 4 tests (original, re-arm on restart, prepare-after-register, spawn groups) | Equivalence study against GD trigger semantics; then connection |
+| 6 | `optimization/MatrixCache` | DISABLED | OFF | **Not connected**. Cocos2d already caches transforms (`m_bTransformDirty`) | 3 tests (dirty invalidates, input change misses, affine composition) | Evidence that it is faster than cocos' own caching |
+| 7 | `adaptive/AdaptiveGovernor` | PARTIAL | ON | Chooses the **effective** tier from frame intervals each frame; effective tuning feeds the culler padding and the (disabled) particle governor | 3 tests (original downgrade, never mutates user config, invalid samples and Custom) | Runtime effect on frame time is UNVERIFIED (protocol). Sustain-window hysteresis from the design log is not implemented; see DESIGN_LOG Entry 5. |
+| 8 | `adaptive/FallbackManager` | PARTIAL | ON (via governor) | Level applied to the effective config each frame | 3 tests (escalate and recover, user override, original jitter trigger) | Runtime effect UNVERIFIED |
+| 9 | `profiling/Profiler` | VERIFIED | ON | **Not used by hooks** | 1 test (scopes do not collide, macro regression) | Used in hooks only if a later release needs it |
+| 10 | `diagnostics/DiagnosticsEngine` | VERIFIED | ON (in memory) | Fed each frame by the manager; spike threshold = 2 frame budgets at target FPS; JSON export | 2 tests (summary from intervals, zero intervals excluded, spikes; spike threshold follows target FPS) | Nothing for the stated scope |
+| 11 | `diagnostics/FrameTimeRecorder` | PARTIAL | OFF (`record-frametimes`) | Writes CSV in the save directory when enabled | 1 test (header and row format) | Real in-game file write on Windows and Android is UNVERIFIED |
+| 12 | `ui/DiagnosticsOverlay` | DISABLED | OFF | **Not drawn.** Text formatting exists, no rendering hook | Formatting not tested | A drawing hook and a visual check |
+| 13 | `config/ConfigManager`, `Presets`, `SettingsMapping` | VERIFIED | — | Settings read through Geode listeners (`syncSettings`) | 6 tests (round-trip, garbage input, presets, unknown tier warning, flag mapping and clamps, default flags) | Settings UI behaviour in-game UNVERIFIED |
+| 14 | `compatibility/CompatibilityLayer` | PARTIAL | — | Initialised with real GD/Geode version constants; **no automatic conflict detection** (only manual `reportConflict`) | 1 test (versions passed through, conflict disables feature) | Conflict detection against other mods (not implemented) |
+| 15 | `platform/Platform` | PARTIAL | — | Used for timing and system info | Compiled and used natively (Linux). Windows and Android code paths compiled by CI only | Device run |
+| 16 | `geode/Hooks.cpp` — `PlayLayer::init/resetLevel/onQuit/postUpdate`, `MenuLayer::init`, settings listeners | BUILD-VERIFIED (compile/link); runtime UNVERIFIED | — | Written against bindings `GeometryDash.bro` (PlayLayer `[[link(android)]]`, win/imac/m1/ios addresses) | CI: the mod target links on Win64 and Android32/64 (the `.geode` file exists only after linking, so `Hooks.cpp` compiled) | In-game run: hooks fire, level lifecycle, settings listeners |
+| 17 | Object enumeration `m_objects->count()/objectAtIndex()` in `registerShadowObjects` | BUILD-VERIFIED (compile/link); runtime UNVERIFIED | — | Used only when `enable-culling` is ON | CI compile succeeded on all three targets. The bindings file comments these methods out, so they come from the Geode/cocos headers. Semantics in-game are unverified. | In-game run with culling on |
+| 18 | Benchmark suite (`optigd_benchmark`) | VERIFIED (harness runs) / **SYNTHETIC** | — | Host-only; not gameplay | Runs on Linux host | Not evidence for any gameplay claim |
+| 19 | Frame-time analyzer `tools/analyze_frametimes.py` | VERIFIED (tool tests) | — | Offline | 12 tool tests on **synthetic CSV** | Real captures from the protocol |
 
 ---
 
-## 5. Unit & Integration Test Results [MEASURED]
+## 3. Build and test results
 
-The native test suite (`optigd_tests`) was built and executed in this environment. All 8 test suites passed:
+Recorded in this sandbox (Debian 12, GCC 12.2, CMake 4.4.4, Ninja 1.13.2, 2 vCPU). **[MEASURED]**
 
-1. `testMemoryArena`: **PASSED** (boundary alignment, block expansion, and reset verification).
-2. `testSpatialHash`: **PASSED** (cell hashing, spatial intersection, and multi-cell deduplication).
-3. `testVisibilityCuller`: **PASSED** (camera frustum culling and culled object accounting).
-4. `testParticleGovernor`: **PASSED** (critical trail preservation, cosmetic offscreen sleep, density scaling).
-5. `testTriggerOptimizer`: **PASSED** (one-shot execution, cursor advance, lookahead boundary check).
-6. `testAdaptiveGovernorAndFallback`: **PASSED** (load downgrade, jitter spike detection, fallback hysteresis).
-7. `testConfigSerialization`: **PASSED** (round-trip serialize and deserialize of configuration presets).
-8. `testCompatibility`: **PASSED** (isolated feature conflict resolution without total disabling).
+| Check | Result |
+|---|---|
+| Native tests, Release (`optigd_tests`) | 39/39 passed |
+| Native tests, Debug + AddressSanitizer + UBSan + `-Wall -Wextra -Wpedantic` | 39/39 passed, no sanitizer report, no compiler warning |
+| Mutation check A: disable `MatrixCache::markDirty` invalidation | `MatrixCache dirty invalidates` FAILED (test caught it) |
+| Mutation check B: remove `TriggerOptimizer` re-arm on `prepareLevel` | `TriggerOptimizer re-arms on restart` FAILED (test caught it) |
+| Source restored after mutation checks | 39/39 passed again |
+| Tool tests (`python3 -m unittest discover -s tools/tests`) | 12/12 passed (**synthetic CSV, tool tests only**) |
+| Geode build, Windows x64 (`build.yml`, run 38042140564 on this branch) | **BUILD-VERIFIED**: job green; `.geode` present and non-empty |
+| Geode build, Android 32-bit (same run) | **BUILD-VERIFIED**: job green |
+| Geode build, Android 64-bit (same run) | **BUILD-VERIFIED**: job green. Combined `.geode` packaging green |
+| Runtime in Geometry Dash, all targets | **RUNTIME-UNVERIFIED** |
+| Compiler warnings in CI | Not checked: CI job logs are not accessible from the sandbox. Re-check in the GitHub UI before merge. |
 
----
+### Defects found before changes and their regression coverage
 
-## 6. Rejected Experiments & Technical Post-Mortem
+| Defect (Entry 2) | Fix | Regression test |
+|---|---|---|
+| SpatialHash `update()` did not reindex | Exact span per item, remove/reinsert on update | SpatialHash moved item |
+| MemoryArena accepted non-power-of-two alignment | Validated | MemoryArena rejects bad alignment |
+| MemoryArena overflow path miscounted usage | Overflow-safe sizing, `kMaxBlockBytes` guard | MemoryArena rejects overflowing size |
+| MatrixCache hit after `markDirty` | Generation/valid check; `invalidate` on destruction | MatrixCache dirty invalidates |
+| Triggers never re-arm after restart | `prepareLevel` resets state | TriggerOptimizer re-arms on restart |
+| Pointers into trigger vector dangled after registration | Registration invalidates the index | TriggerOptimizer requires prepare after registration |
+| `ConfigManager::getConfig` returned unlocked reference; `stoi`/`stof` could throw | Copy under lock; non-throwing parser | ConfigManager rejects garbage |
+| Hard-coded `initialize("2.2081","v4.0.0")` | Versions from `Version.hpp` | CompatibilityLayer conflict and defaults |
+| `syncSettings` wrote back a stale config (undid presets) | Snapshot → `resolveSettings` → one write | SettingsMapping flags and clamps |
+| Governor wrote preset values into the user config | Effective config only | AdaptiveGovernor never mutates user config |
+| Fallback permanently reduced settings, no recovery | Reversible levels on the effective config | FallbackManager escalates and recovers |
+| Frame time measured only `postUpdate` | Frame interval measured between frames; game update time separate | Diagnostics summary from intervals |
+| `heapAllocationsAvoided` mislabelled | Renamed to `arenaAllocations` | Diagnostics summary (counts arena allocations) |
+| ParticleGovernor O(N) and hard-coded margin | Incremental totals; hysteresis margins | Incremental totals; hysteresis band |
+| `OPTIGD_PROFILE_SCOPE` used `__LINE__` without pasting | Two-level paste | Profiler scopes do not collide |
+| Profiler allocated a `std::string` per record | Transparent lookup | (covered by the profiler test; no allocation assertion) |
+| `Platform.cpp` missing includes; `TARGET_OS_IPHONE` without header | Includes added, `NOMINMAX` on Windows | Compiled natively; Windows/Apple branches CI-only |
+| Hooks: PlayLayer hooks Windows-only; `updateVisibility` no-op | Guard removed (bindings show Android link); no-op removed | Compile check in CI (not yet run) |
+| Stale `sdk: latest` / `@main` in CI | Pinned (see `.github/workflows`) | Workflow review; first CI run pending |
 
-1. **Dead-Code Elimination in Particle Benchmarks**:
-   - *Hypothesis*: Simple loop math (`std::sin * std::cos`) would measure particle update compute times.
-   - *Finding*: Under GCC `-O3`, the compiler recognized that unread local variables had no side effects and deleted the loop entirely (resulting in 0.0 µs baseline).
-   - *Correction*: Rewrote the benchmark to write genuine vertex quad buffers (`ParticleQuad` structures) and used volatile memory barriers (`asm volatile("" : : "g"(p) : "memory")`), measuring real memory and CPU instructions.
-2. **Multithreaded Spatial Culling**:
-   - *Hypothesis*: Distributing spatial hash queries across worker threads using `std::async`.
-   - *Finding*: For typical frame queries (< 100 µs), thread dispatch and synchronization overhead exceeded the total query time.
-   - *Decision*: Kept culling single-threaded on the render thread with cache-friendly contiguous arrays, achieving 12.6 µs per frame without thread overhead.
-3. **Dynamic Set Deduplication in Spatial Hash**:
-   - *Hypothesis*: Using `std::unordered_set<uint32_t>` to deduplicate objects that span multiple cells.
-   - *Finding*: Dynamic hash set allocations and node hashing cost 4x more CPU time than the culling check itself.
-   - *Decision*: Implemented generational integer query stamps (`item.lastQueryStamp == m_currentQueryStamp`), achieving $O(1)$ deduplication with zero allocations.
-
----
-
-## 7. Known Limitations
-
-1. **Host Client Execution**: The Geometry Dash client binary cannot be launched in this headless Linux sandbox environment.
-2. **Dynamic Level Mutation**: Levels that dynamically move 50,000 objects every frame across vast coordinate ranges require spatial hash cell re-insertion. OptiGD handles static and slowly-moving geometry at peak efficiency.
-
----
-
-## 8. Build and Installation Instructions
-
-### Native Test Suite & Benchmarks
-```bash
-# In repository root:
-cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-
-# Run unit tests:
-./build/optigd_tests
-
-# Run synthetic benchmarks:
-./build/optigd_benchmark
-```
-
-### Building the .geode Mod Artifact
-1. Push changes to GitHub or create a Pull Request.
-2. The GitHub Actions workflow `.github/workflows/build.yml` compiles for **Windows x64**, **Android 32-bit**, and **Android 64-bit**.
-3. Download the packaged `coderunknow.optigd.geode` artifact directly from the GitHub Actions run summary.
-4. Place `coderunknow.optigd.geode` into your Geometry Dash `geode/mods/` directory.
+Also corrected: the original tests asserted a `Cosmetic` emitter multiplier of 0.5 and a one-shot
+trigger; both assertions are kept.
 
 ---
 
-## 9. Git Checkpoint History & Quality Gate Audit [MEASURED]
+## 4. Known blockers and unverified items
 
-- **Working Branch**: `arena/01a0a360-optigd`
-- **Pull Request**: [#1: OptiGD v1.0.0 High-Performance Optimization Engine & Multi-Platform Geode CI](https://github.com/coderunknow/OptiGD/pull/1)
-- **CI Run**: [Run #34933233751](https://github.com/coderunknow/OptiGD/actions/runs/34933233751) (100% Green across all 5 matrix jobs)
-- **Built Artifact**: `coderunknow.optigd.geode` (SHA-256 `85e4e61503ed0fc916a6de84f833e5d7dc41360afb62cc847a72a729880306eb`, 136,757 bytes)
+1. **Gameplay benchmark: BLOCKED.** No Geometry Dash 2.2081 client, Geode runtime, or test device in
+   this environment. See `docs/GAMEPLAY_BENCHMARK_PROTOCOL.md`. Acceptance criterion
+   *"OptiGD improves frame time in Geometry Dash"* is **unresolved**. No FPS or frame-time improvement
+   is claimed anywhere in this release.
+2. **Geode compile: BUILD-VERIFIED** on Windows x64, Android32, and Android64 by `build.yml` (run 38042140564). Runtime is still UNVERIFIED.
+3. **Camera rectangle** (`convertToNodeSpace` of window corners into the object layer) is an assumption
+   until checked in-game.
+4. **Upstream policy:** the Geode repository's `AGENTS.md` states that AI-written mods are not accepted
+   by the Geode index. This conflicts with the task and is raised as a publishing question. It is not
+   resolved by this release.
 
-### Milestone Checkpoint Commits:
-1. `fd736ea`: `feat(core): implement core engine architecture, memory arena, and spatial hash`
-2. `6da59e2`: `feat(optimization): implement visibility culler, particle governor, trigger optimizer, and adaptive governor`
-3. `5cdf38b`: `test(benchmarks): add unit tests, synthetic benchmark harness, and test runner scripts`
-4. `f1e66f2`: `ci(github-actions): add multi-platform Geode mod build workflow and hooks`
-5. `7b9e9e6`: `docs: add architecture specification, benchmark analysis, evidence report, and v1.0.0 changelog`
-6. `064c16a`: `fix(tests): include <cmath> for std::abs compatibility with GCC 13/14`
-7. `c9c697d`: `fix(types): explicitly include <cstdint> and <cstddef> across all core and compatibility headers`
-8. `7ce3ffc`: `fix(mod.json): set geode version to 5.10.1 and gd to * for Geode SDK regex matching`
-9. `43a6c36`: `fix(cmake): resolve keyword signature clash in target_link_libraries for Windows Geode build`
+---
 
+## 5. Labelling conventions
+
+- **[MEASURED]**: produced by a recorded run in this repository's environment, with the command given.
+- **[SYNTHETIC]**: produced by a host-side harness (microbenchmark or synthetic CSV). Never gameplay.
+- **[PROJECTED]**: model-based estimate; the model is stated. None in this release.
+- **[UNVERIFIED]**: not measured.
+
+### Host microbenchmark run [SYNTHETIC] [MEASURED on host]
+
+Command: `./build/optigd_benchmark` (Release, GCC 12.2, Linux, 2 logical cores, 3.9 GB RAM).
+These isolate OptiGD code with generated inputs. They say nothing about frame time in the game.
+
+| Scenario | Iterations | Mean (µs) | P95 (µs) |
+|---|---:|---:|---:|
+| VisibilityCuller query (camera window, 50k objects) | 300 | 11.697 | 15.144 |
+| MemoryArena 64 × 64 B allocations + reset | 300 | 0.293 | 0.304 |
+| ParticleGovernor evaluate 2000 emitters | 300 | 26.297 | 29.014 |
+| AdaptiveGovernor recordFrameInterval + update | 300 | 1.485 | 2.992 |
+
+Host numbers vary between machines and runs; they are not a claim about any device.
+
+---
+
+## 6. Test environment **[MEASURED]**
+
+- OS: Debian GNU/Linux 12 (bookworm), Linux x86_64; 2 logical cores; ~3.9 GB RAM.
+- Compiler: GCC 12.2.0, `-std=c++20`. Build: CMake 4.4.4, Ninja 1.13.2 (Python venv).
+- No Geometry Dash client, no Geode runtime, no Android NDK, no Windows host.
+
+## 7. Known limitations (beta)
+
+- Most optimization modules are not connected to gameplay in this release. Their status is DISABLED or
+  PARTIAL in §2, and they are off by default.
+- Shadow culling measures object-frames a culler would cull. It does not reduce any work.
+- The trigger optimizer is a model and not GD's trigger semantics.
+- No conflict detection with other mods.
+- The diagnostics HUD is not drawn in-game.

@@ -3,12 +3,11 @@
 #ifdef GEODE_MOD_ID
 
 #include <Geode/Geode.hpp>
-#include "../core/OptiGDManager.hpp"
 
 namespace optigd::geode_mod {
 
-void initializeMod();
-void syncSettingsWithConfig();
+// Reads every setting into a config snapshot and applies it. Safe to call repeatedly.
+void syncSettings();
 
 } // namespace optigd::geode_mod
 

@@ -1,154 +1,164 @@
 #include "AdaptiveGovernor.hpp"
+#include "../config/Presets.hpp"
 #include "../core/Logger.hpp"
-#include <numeric>
-#include <cmath>
+
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <numeric>
+#include <vector>
 
 namespace optigd::adaptive {
 
-AdaptiveGovernor::AdaptiveGovernor(const core::OptiConfig& initialConfig)
-    : m_targetFps(initialConfig.targetFrameRate),
-      m_targetFrameBudgetMs(initialConfig.targetFrameTimeMs),
-      m_currentTier(initialConfig.tier),
-      m_hysteresisCooldown(initialConfig.fallbackCooldownFrames) {}
+namespace {
+
+// Maps the three ordered tiers to indices so that "one step" is well defined.
+int tierRank(core::PerformanceTier tier) {
+    switch (tier) {
+        case core::PerformanceTier::LowEnd: return 0;
+        case core::PerformanceTier::Balanced: return 1;
+        case core::PerformanceTier::HighEnd: return 2;
+        case core::PerformanceTier::Custom: return -1;
+    }
+    return -1;
+}
+
+core::PerformanceTier tierFromRank(int rank) {
+    if (rank <= 0) return core::PerformanceTier::LowEnd;
+    if (rank == 1) return core::PerformanceTier::Balanced;
+    return core::PerformanceTier::HighEnd;
+}
+
+} // namespace
+
+AdaptiveGovernor::AdaptiveGovernor(const core::OptiConfig& userConfig) {
+    reset(userConfig);
+}
+
+void AdaptiveGovernor::reset(const core::OptiConfig& userConfig) {
+    setTargetFrameRate(userConfig.targetFrameRate);
+    m_currentTier = userConfig.tier;
+    m_frameIntervalsMs.clear();
+    m_cooldownRemaining = 0;
+    m_stats = WindowStats{};
+    m_tierTransitions = 0;
+}
 
 void AdaptiveGovernor::setTargetFrameRate(float fps) {
-    if (fps <= 0.0f) fps = 60.0f;
+    if (!std::isfinite(fps) || fps <= 0.0f) fps = 60.0f;
     m_targetFps = fps;
     m_targetFrameBudgetMs = 1000.0 / static_cast<double>(fps);
 }
 
 void AdaptiveGovernor::forceTier(core::PerformanceTier tier) {
     m_currentTier = tier;
-    m_cooldownRemaining = m_hysteresisCooldown;
-    OPTIGD_LOG_INFO(std::string("Manually set performance tier to: ") + core::tierToString(tier));
+    m_cooldownRemaining = m_cooldownFrames;
+    OPTIGD_LOG_INFO(std::string("Adaptive governor: effective tier set to ") + core::tierToString(tier));
 }
 
-void AdaptiveGovernor::recordFrameTime(double frameTimeUs) {
-    double frameTimeMs = frameTimeUs / 1000.0;
-    m_frameTimesMs.push_back(frameTimeMs);
-    if (m_frameTimesMs.size() > m_windowSize) {
-        m_frameTimesMs.pop_front();
-    }
+void AdaptiveGovernor::recordFrameInterval(double frameIntervalUs) {
     m_totalFrames++;
+    if (!std::isfinite(frameIntervalUs) || frameIntervalUs <= 0.0) {
+        return; // discontinuity (first frame, pause): not a sample
+    }
+    m_frameIntervalsMs.push_back(frameIntervalUs / 1000.0);
+    if (m_frameIntervalsMs.size() > kWindowSize) {
+        m_frameIntervalsMs.pop_front();
+    }
 }
 
 void AdaptiveGovernor::calculateWindowStats() {
-    if (m_frameTimesMs.empty()) return;
+    const size_t n = m_frameIntervalsMs.size();
+    m_stats.sampleCount = n;
+    if (n == 0) return;
 
-    size_t n = m_frameTimesMs.size();
-    double sum = std::accumulate(m_frameTimesMs.begin(), m_frameTimesMs.end(), 0.0);
+    const double sum = std::accumulate(m_frameIntervalsMs.begin(), m_frameIntervalsMs.end(), 0.0);
     m_stats.meanMs = sum / static_cast<double>(n);
     m_stats.fps = m_stats.meanMs > 0.0 ? (1000.0 / m_stats.meanMs) : 0.0;
 
     double sqDiffSum = 0.0;
-    m_stats.minMs = 1e9;
-    m_stats.maxMs = 0.0;
-
-    for (double val : m_frameTimesMs) {
+    m_stats.minMs = m_frameIntervalsMs.front();
+    m_stats.maxMs = m_frameIntervalsMs.front();
+    for (double val : m_frameIntervalsMs) {
         m_stats.minMs = std::min(m_stats.minMs, val);
         m_stats.maxMs = std::max(m_stats.maxMs, val);
-        double diff = val - m_stats.meanMs;
+        const double diff = val - m_stats.meanMs;
         sqDiffSum += diff * diff;
     }
-
     m_stats.varianceMs = sqDiffSum / static_cast<double>(n);
     m_stats.stdDevMs = std::sqrt(m_stats.varianceMs);
 
-    // Compute P95 and P99 percentiles
-    std::vector<double> sortedTimes(m_frameTimesMs.begin(), m_frameTimesMs.end());
-    std::sort(sortedTimes.begin(), sortedTimes.end());
-
-    size_t idx95 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.95));
-    size_t idx99 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.99));
-    if (idx95 >= n) idx95 = n - 1;
-    if (idx99 >= n) idx99 = n - 1;
-
-    m_stats.p95Ms = sortedTimes[idx95];
-    m_stats.p99Ms = sortedTimes[idx99];
+    std::vector<double> sorted(m_frameIntervalsMs.begin(), m_frameIntervalsMs.end());
+    std::sort(sorted.begin(), sorted.end());
+    // Nearest-rank percentile: index = ceil(p * n) - 1.
+    const auto rank = [n](double p) {
+        size_t r = static_cast<size_t>(std::ceil(p * static_cast<double>(n)));
+        if (r == 0) r = 1;
+        return std::min(r, n) - 1;
+    };
+    m_stats.p95Ms = sorted[rank(0.95)];
+    m_stats.p99Ms = sorted[rank(0.99)];
 }
 
-void AdaptiveGovernor::update(core::OptiConfig& currentConfig) {
-    auto startTime = std::chrono::steady_clock::now();
+void AdaptiveGovernor::update(const core::OptiConfig& userConfig) {
+    const auto startTime = std::chrono::steady_clock::now();
 
     calculateWindowStats();
 
-    if (m_cooldownRemaining > 0) {
-        m_cooldownRemaining--;
-    } else if (m_dynamicEnabled && m_frameTimesMs.size() >= 30) {
-        evaluateTierAdjustment(currentConfig);
+    if (userConfig.tier == core::PerformanceTier::Custom) {
+        m_currentTier = core::PerformanceTier::Custom;
     }
 
-    auto endTime = std::chrono::steady_clock::now();
+    if (m_cooldownRemaining > 0) {
+        m_cooldownRemaining--;
+    } else if (m_dynamicEnabled && m_frameIntervalsMs.size() >= kMinSamples) {
+        evaluateTierAdjustment();
+    }
+
+    const auto endTime = std::chrono::steady_clock::now();
     m_lastOverheadUs = std::chrono::duration<double, std::micro>(endTime - startTime).count();
 }
 
-void AdaptiveGovernor::evaluateTierAdjustment(core::OptiConfig& config) {
+void AdaptiveGovernor::evaluateTierAdjustment() {
     if (m_currentTier == core::PerformanceTier::Custom) {
-        return; // Custom mode does not auto-scale
+        return; // Custom never auto-scales
     }
 
-    // Check if frame-time budget is exceeded (P95 > 105% budget or mean > budget)
-    bool underBudgetPressure = (m_stats.p95Ms > m_targetFrameBudgetMs * 1.05) ||
-                               (m_stats.meanMs > m_targetFrameBudgetMs);
+    const bool underBudgetPressure = (m_stats.p95Ms > m_targetFrameBudgetMs * 1.05) ||
+                                     (m_stats.meanMs > m_targetFrameBudgetMs);
+    const bool ampleHeadroom = (m_stats.p99Ms < m_targetFrameBudgetMs * 0.75) &&
+                               (m_stats.meanMs < m_targetFrameBudgetMs * 0.70);
 
-    // Check if ample headroom exists (P99 < 75% budget and mean < 70% budget)
-    bool ampleHeadroom = (m_stats.p99Ms < m_targetFrameBudgetMs * 0.75) &&
-                         (m_stats.meanMs < m_targetFrameBudgetMs * 0.70);
-
-    core::PerformanceTier newTier = m_currentTier;
-
+    const int rank = tierRank(m_currentTier);
+    int newRank = rank;
     if (underBudgetPressure) {
-        // Need to downgrade visual load to preserve frame stability
-        if (m_currentTier == core::PerformanceTier::HighEnd) {
-            newTier = core::PerformanceTier::Balanced;
-        } else if (m_currentTier == core::PerformanceTier::Balanced) {
-            newTier = core::PerformanceTier::LowEnd;
-        }
+        newRank = std::max(0, rank - 1);       // one step toward LowEnd
     } else if (ampleHeadroom) {
-        // Safe to upgrade fidelity without dropping frames
-        if (m_currentTier == core::PerformanceTier::LowEnd) {
-            newTier = core::PerformanceTier::Balanced;
-        } else if (m_currentTier == core::PerformanceTier::Balanced) {
-            newTier = core::PerformanceTier::HighEnd;
-        }
+        newRank = std::min(2, rank + 1);       // one step toward HighEnd
     }
 
-    if (newTier != m_currentTier) {
-        OPTIGD_LOG_INFO(std::string("AdaptiveGovernor transitioned from ") +
-                        core::tierToString(m_currentTier) + " to " +
+    if (newRank != rank) {
+        const core::PerformanceTier newTier = tierFromRank(newRank);
+        OPTIGD_LOG_INFO(std::string("Adaptive governor: ") + core::tierToString(m_currentTier) + " -> " +
                         core::tierToString(newTier) +
-                        " (mean: " + std::to_string(m_stats.meanMs) + "ms, p95: " +
-                        std::to_string(m_stats.p95Ms) + "ms, budget: " +
-                        std::to_string(m_targetFrameBudgetMs) + "ms)");
-
+                        " (mean " + std::to_string(m_stats.meanMs) + " ms, p95 " +
+                        std::to_string(m_stats.p95Ms) + " ms, budget " +
+                        std::to_string(m_targetFrameBudgetMs) + " ms)");
         m_currentTier = newTier;
-        config.tier = newTier;
-        m_cooldownRemaining = m_hysteresisCooldown; // Reset hysteresis cooldown
+        m_cooldownRemaining = m_cooldownFrames;
         m_tierTransitions++;
-
-        // Apply tier defaults
-        if (newTier == core::PerformanceTier::LowEnd) {
-            config.particleDensityScale = 0.5f;
-            config.maxActiveParticles = 2048;
-            config.cullOffscreenEmitters = true;
-            config.cameraPaddingX = 120.0f;
-            config.cameraPaddingY = 80.0f;
-        } else if (newTier == core::PerformanceTier::Balanced) {
-            config.particleDensityScale = 0.75f;
-            config.maxActiveParticles = 4096;
-            config.cullOffscreenEmitters = true;
-            config.cameraPaddingX = 150.0f;
-            config.cameraPaddingY = 100.0f;
-        } else if (newTier == core::PerformanceTier::HighEnd) {
-            config.particleDensityScale = 1.0f;
-            config.maxActiveParticles = 8192;
-            config.cullOffscreenEmitters = false;
-            config.cameraPaddingX = 200.0f;
-            config.cameraPaddingY = 150.0f;
-        }
     }
+}
+
+core::OptiConfig AdaptiveGovernor::effectiveConfig(const core::OptiConfig& userConfig) const {
+    core::OptiConfig out = userConfig;
+    if (m_currentTier == core::PerformanceTier::Custom || userConfig.tier == core::PerformanceTier::Custom) {
+        return out; // user tuning is authoritative for Custom
+    }
+    if (auto tuning = config::presetTuning(m_currentTier)) {
+        config::applyTuning(out, m_currentTier, *tuning);
+    }
+    return out;
 }
 
 } // namespace optigd::adaptive

@@ -1,53 +1,25 @@
 #pragma once
 
-#include "../core/Types.hpp"
+#include <cstddef>
 #include <string>
 #include <vector>
 
 namespace optigd::benchmark {
 
-struct BenchmarkMetricResult {
+// One host-side microbenchmark. Every value is a MEASURED time on the machine that ran it.
+// These are SYNTHETIC: they measure OptiGD code in isolation with generated inputs. They
+// are not gameplay measurements and must never be reported as FPS improvements.
+struct MicroResult {
     std::string name;
-    double baselineMeanUs{0.0};
-    double optigdMeanUs{0.0};
-    double speedupFactor{1.0};
-
-    double baselineP95Us{0.0};
-    double optigdP95Us{0.0};
-
-    double baselineP99Us{0.0};
-    double optigdP99Us{0.0};
-
-    double baselineStdDevUs{0.0};
-    double optigdStdDevUs{0.0};
-
-    double baselineSimulatedFps{0.0};
-    double optigdSimulatedFps{0.0};
-
-    std::string notes;
+    size_t iterations{0};
+    double meanUs{0.0};
+    double p95Us{0.0};
 };
 
-struct BenchmarkSuiteResult {
-    std::string testEnvironment;
-    std::vector<BenchmarkMetricResult> scenarios;
-    double adaptiveGovernorOverheadUs{0.0};
-    double memoryArenaAllocationSpeedup{0.0};
-};
+// Runs the microbenchmarks. Sizes are inputs; results are whatever this host measures.
+std::vector<MicroResult> runMicrobenchmarks(size_t objectCount = 50000, size_t iterations = 300);
 
-class BenchmarkSuite {
-public:
-    static BenchmarkSuiteResult runAllBenchmarks(size_t objectCount = 50000, size_t frameCount = 300);
-
-    static BenchmarkMetricResult runCullingBenchmark(size_t objectCount, size_t frameCount);
-    static BenchmarkMetricResult runMemoryBenchmark(size_t allocsPerFrame, size_t frameCount);
-    static BenchmarkMetricResult runParticleBenchmark(size_t emitterCount, size_t frameCount);
-    static BenchmarkMetricResult runTriggerBenchmark(size_t triggerCount, size_t frameCount);
-    static BenchmarkMetricResult runIntegratedBenchmark(size_t objectCount, size_t particleCount, size_t triggerCount, size_t frameCount);
-
-    static double measureGovernorOverhead(size_t iterations = 10000);
-
-    static void printResultsTable(const BenchmarkSuiteResult& result);
-    static std::string exportMarkdownReport(const BenchmarkSuiteResult& result);
-};
+// Markdown table labelled [SYNTHETIC], with host info.
+std::string formatReport(const std::vector<MicroResult>& results);
 
 } // namespace optigd::benchmark

@@ -38,3 +38,6 @@ compile_commands.json
 optigd_diagnostics.json
 optigd_log.txt
 *.log
+
+# Python caches
+__pycache__/

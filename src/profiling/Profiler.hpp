@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -23,6 +24,14 @@ struct ProfileMetric {
     }
 };
 
+// Transparent hash so lookups by std::string_view do not allocate a std::string.
+struct StringViewHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
 class Profiler {
 public:
     static Profiler& instance();
@@ -39,7 +48,7 @@ public:
 private:
     Profiler() = default;
     mutable std::mutex m_mutex;
-    std::unordered_map<std::string, ProfileMetric> m_metrics;
+    std::unordered_map<std::string, ProfileMetric, StringViewHash, std::equal_to<>> m_metrics;
     bool m_enabled{true};
 };
 
@@ -63,4 +72,10 @@ private:
 
 } // namespace optigd::profiling
 
-#define OPTIGD_PROFILE_SCOPE(name) optigd::profiling::ProfileScope optigd_scope_##__LINE__(name)
+// Two-level paste so __LINE__ expands before concatenation (a direct ## would produce the
+// literal identifier optigd_scope___LINE__ and collide across scopes).
+#define OPTIGD_PROFILE_CONCAT_INNER(a, b) a##b
+#define OPTIGD_PROFILE_CONCAT(a, b) OPTIGD_PROFILE_CONCAT_INNER(a, b)
+// name must be a string literal: ProfileScope stores a view, not a copy.
+#define OPTIGD_PROFILE_SCOPE(name) \
+    optigd::profiling::ProfileScope OPTIGD_PROFILE_CONCAT(optigd_scope_, __LINE__)(name)
