@@ -40,19 +40,18 @@ if (DEFINED ENV{GEODE_SDK} AND NOT OPTIGD_STANDALONE_ONLY)
     endif()
     set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
-    add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
-
     add_library(${PROJECT_NAME} SHARED
         ${OPTIGD_CORE_SOURCES}
         src/geode/Hooks.cpp
     )
 
-    target_include_directories(${PROJECT_NAME} PRIVATE src)
+    target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
         GEODE_IS_COMPILING=1
         OPTIGD_VERSION="${OPTIGD_VERSION_STRING}"
     )
 
+    add_subdirectory($ENV{GEODE_SDK} ${CMAKE_CURRENT_BINARY_DIR}/geode)
     setup_geode_mod(${PROJECT_NAME})
 
 # ---------------------------------------------------------------------------

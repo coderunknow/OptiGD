@@ -97,16 +97,20 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          export GEODE_SDK="${{ github.workspace }}/geode-sdk-clone"
-          export CPM_SOURCE_CACHE="${{ github.workspace }}/cpm-cache"
+          set +e
+          set +o pipefail
           if [ ! -d "build" ]; then
-            echo "::error title=Stage::Failed before CMake configure (inside Setup CLI or Setup Geode SDK)"
+            echo "::error file=CMakeLists.txt,line=1::Build directory not created (failed in SDK setup or CMake configure)"
           else
-            OUT=$(cmake --build build --config Release 2>&1 | grep -E "error:|fatal error:|Error|FAILED|undefined" | head -n 20 | tr '\n\r' '  ')
-            if [ -z "$OUT" ]; then
-              OUT=$(cmake --build build --config Release 2>&1 | tail -n 25 | tr '\n\r' '  ')
-            fi
-            echo "::error title=CompilerOutput::$OUT"
+            cmake --build build --config Release > diag.log 2>&1
+            grep -E "error:|fatal error:|FAILED|CMake Error|undefined" diag.log | head -n 15 | while IFS= read -r line; do
+              clean=$(echo "$line" | tr -d '\r' | sed 's/::/: :/g')
+              echo "::error file=src/geode/Hooks.cpp,line=1::$clean"
+            done
+            tail -n 15 diag.log | while IFS= read -r line; do
+              clean=$(echo "$line" | tr -d '\r' | sed 's/::/: :/g')
+              echo "::warning file=src/geode/Hooks.cpp,line=1::$clean"
+            done
           fi
           exit 1
 
