@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OptiGD v0.1.0-beta1 Diagnostics & Benchmark Report Formatter
+OptiGD v0.1.0-beta.2 Diagnostics & Benchmark Report Formatter
 Parses JSON reports exported by DiagnosticsEngine or BenchmarkSuite and produces
 human-readable Markdown tables, including before/after baseline vs. OptiGD comparisons.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 
 def format_single_report(data: dict) -> str:
     lines = []
-    version = data.get("optigd_version", data.get("version", "0.1.0-beta1"))
+    version = data.get("optigd_version", data.get("version", "0.1.0-beta.2"))
     lines.append(f"# OptiGD v{version} Diagnostics Summary\n")
 
     if "platform" in data:
@@ -86,7 +86,7 @@ def pct_delta(baseline: float, optimized: float) -> str:
 def format_comparison_report(base_data: dict, opti_data: dict) -> str:
     bt = base_data.get("telemetry", {})
     ot = opti_data.get("telemetry", {})
-    version = opti_data.get("optigd_version", "0.1.0-beta1")
+    version = opti_data.get("optigd_version", "0.1.0-beta.2")
 
     lines = [
         f"# OptiGD v{version} Comparative Telemetry Report\n",

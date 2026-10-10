@@ -4,6 +4,40 @@ All notable changes to **OptiGD** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.2] - 2026-10-10
+
+### Summary
+Release candidate that fixes the blocking loader defect in `v0.1.0-beta1` (the mod was skipped at startup with `unexpected type string`), closes six audit findings against the core engine, and adds out-of-process schema validation for both JSON artefacts the mod emits.
+
+### Fixed
+- **Blocking loader defect (root cause)**: `"version": "v0.1.0-beta1"` in `mod.json` is rejected by Geode `5.10.1`'s `VersionInfo::parse` (`Expected end of version, found '1'`), which `JsonValidation::tryGet<T>()` reports as `unexpected type string` and `LoaderImpl` turns into `addProblem({InvalidGeodeFile})`. The version is now `v0.1.0-beta.2` — the only prerelease form Geode accepts that preserves the `beta2` designation. See `EVIDENCE_REPORT.md` for the static and dynamic evidence chain.
+- **`VisibilityCuller` visibility-state desync**: `encodeIndex`/`decodeIndex` now offset by `+1` so object index `0` is distinguishable from the `SpatialHash`'s "no item" sentinel. Without this, object 0's visibility could never be tracked.
+- **`VisibilityCuller::setCellSize()` mid-level**: now calls a new private `rebuildSpatialIndex()`; previously the cell-size change applied to newly inserted objects only, leaving the existing index on the old grid.
+- **Culling could not be undone**: added `restoreAllVisibility()` (plus `hasCulledObjects()` / `getCellSize()`). `PlayLayer` now tracks `cullingEngaged` and restores a captured buffer when `enableSpatialCulling` is switched off mid-level, so previously hidden decorative objects reappear instead of staying invisible for the rest of the attempt.
+- **`ParticleGovernor` derived stats were `O(N)` per call**: `getLastAvoidedParticleCount()` is now lazy (`recomputeDerivedStats()` behind a dirty flag), and `m_currentTotalParticles` / `m_sleepingEmitterCount` are maintained incrementally in `recordActiveParticles()`, `unregisterEmitter()`, and the sleep/wake transitions. `recalculateParticleTotals()` is gone.
+- **`MatrixCache` served matrices it never computed**: entries created implicitly by `setParent()` were indistinguishable from computed ones, so a default-initialised identity matrix could satisfy a `getCached()` lookup. Added a `computed` flag, made `store()` anchor-aware so it cannot desync from `getOrCompute()`'s cache key, and added `pruneStaleEntries()` to drop never-computed phantom nodes (with child detachment, so no dangling pointers).
+- **`FallbackManager` recovery was unreachable during cooldown**: recovery is now evaluated every frame; the cooldown only gates the application of a *new* fallback. Previously a stabilised workload could not restore its pre-fallback settings until the whole cooldown elapsed.
+- **`CompatibilityLayer` GD gate was a prefix test**: `starts_with("2.2")` accepts GD `2.21x`, whose structure layouts differ from the `2.2081` bindings OptiGD is compiled against. Replaced with a numeric comparison against `kTargetGDVersion`.
+- **Tier defaults were duplicated**: `ConfigManager::applyTierPresetUnlocked()` and `AdaptiveGovernor::evaluateTierAdjustment()` carried independent copies, so an automatic transition could apply different settings than the same tier selected by hand. Both now use `core::kTierDefaults` / `core::applyTierDefaults()` in `Types.hpp`; `Custom` is an explicit no-op.
+- **`TriggerOptimizer::inspectLookaheadWindow()` mutated execution state** despite being documented as non-destructive. It now uses a separate `reportedInLookahead` flag and leaves `activated` / `isCompleted` untouched, so telemetry cannot perturb what `evaluate()` would execute.
+- **`Profiler::record()` took a mutex and materialised a `std::string` key on the hot path** — a per-frame heap allocation that contradicted the zero-allocation claim. Added `MetricId` + `recordById()` (fixed `std::array`, no lock, no allocation); the name-based API resolves known metrics to the same slots.
+- **Robustness**: `ConfigManager::deserialize` no longer throws on malformed persisted text (guarded `parseInt`/`parseFloat`/`parseUnsigned`); `MemoryArena` no longer destroys live frame-scoped data when reusing an existing block; `DiagnosticsEngine` JSON now escapes every interpolated string; `#pragma comment(lib,"psapi.lib")` is `_MSC_VER`-guarded.
+
+### Added
+- **`src/core/GeodeVersion.{hpp,cpp}`**: a faithful port of Geode `5.10.1`'s `VersionInfo::parse` / `VersionTag::parse`, so the exact grammar is testable without the SDK.
+- **`tools/validate_geode_metadata.py`**: validates `mod.json` against the SDK's mod-id regex, `gd` object shape, `VersionInfo` grammar and settings-schema rules, and cross-checks `version` / `geode` / `gd` against `Types.hpp` and `CMakeLists.txt`. Runs in `ctest`.
+- **`tools/validate_diagnostics_json.py`** and **`tools/validate_benchmark_json.py`**: schema validators for the two JSON artefacts. The benchmark validator additionally asserts `evidence_classification == "[SIMULATED]"` and `optigd_heap_allocations == 0`.
+- **`optigd_tests --emit-report <path>`**: writes a real diagnostics JSON report so the artefact can be validated out of process (wired up as the `OptiGDDiagnosticsJson` ctest).
+- **Per-subsystem timing**: `recordCullingTimeUs` / `recordParticleTimeUs` / `recordTriggerTimeUs` / `recordMatrixTimeUs` on `OptiGDManager`, fed from the hooks.
+- **Honest trigger telemetry**: `DiagnosticsEngine` now emits a `notes` block stating `native_trigger_execution_modified: false` and defining `total_triggers_skipped`, and trigger counters report `0` unless `enableTriggerIndexing` is on — indexing is telemetry-only and never gates native execution.
+
+### Changed
+- Trigger counters are reported as `0` unless trigger indexing is enabled (previously they could imply a saving that was never realised).
+- `tests/UnitTests.cpp` grows from 9 to 20 tests; the eleven new ones lock the audit fixes behind regressions.
+
+### Notes
+- Live in-game frame-time captures on physical Windows/Android hardware remain **`[UNVERIFIED / BLOCKED]`**. No live-game performance gain is claimed.
+
 ## [0.1.0-beta1] - 2026-10-10
 
 ### Summary

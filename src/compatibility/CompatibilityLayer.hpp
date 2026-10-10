@@ -46,6 +46,15 @@ public:
 
     static int parseMajorVersion(std::string_view ver);
 
+    // Splits "2.2081" / "v2.2081" into numeric components. Returns false when
+    // the string does not start with a dotted numeric version.
+    static bool parseVersionComponents(std::string_view ver, int& major, int& minor, int& patch);
+
+    // True when `gdVersion` denotes the exact GD build OptiGD was compiled
+    // against. A prefix test such as starts_with("2.2") is not sufficient: GD
+    // 2.21x would pass while using different structure layouts.
+    static bool isSupportedGDVersion(std::string_view gdVersion);
+
 private:
     CompatibilityLayer() = default;
     std::string m_gdVersion{core::kTargetGDVersion};

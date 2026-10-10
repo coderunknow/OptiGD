@@ -50,7 +50,7 @@ public:
     void setGlobalParticleLimit(uint32_t limit);
     uint32_t getGlobalParticleLimit() const { return m_globalMaxParticles; }
 
-    void setCullOffscreen(bool cull) { m_cullOffscreen = cull; }
+    void setCullOffscreen(bool cull) { m_cullOffscreen = cull; markDerivedStatsDirty(); }
     bool isCullOffscreen() const { return m_cullOffscreen; }
 
     void clear();
@@ -77,9 +77,18 @@ public:
     void recordActiveParticles(uint32_t emitterId, uint32_t count);
 
     size_t getTrackedEmitterCount() const { return m_activeEmitterCount; }
+
+    // O(1): the running total is maintained incrementally by
+    // recordActiveParticles()/unregisterEmitter() instead of being recomputed
+    // per emitter per frame (which was O(N^2) per frame).
     uint32_t getTotalActiveParticles() const { return m_currentTotalParticles; }
-    uint32_t getLastCulledEmitterCount() const { return m_lastCulledEmitters; }
-    uint32_t getLastAvoidedParticleCount() const { return m_lastAvoidedParticles; }
+
+    // O(1): sleeping-emitter count is maintained on sleep/wake transitions.
+    uint32_t getLastCulledEmitterCount() const { return m_sleepingEmitterCount; }
+
+    // O(N) but computed at most once per frame, on demand, and only when the
+    // underlying emitter state actually changed.
+    uint32_t getLastAvoidedParticleCount() const;
 
     const ParticleEmitterInfo* getEmitterInfo(uint32_t id) const;
 
@@ -94,10 +103,13 @@ private:
 
     size_t m_activeEmitterCount{0};
     uint32_t m_currentTotalParticles{0};
-    uint32_t m_lastCulledEmitters{0};
-    uint32_t m_lastAvoidedParticles{0};
 
-    void recalculateParticleTotals();
+    uint32_t m_sleepingEmitterCount{0};
+    mutable uint32_t m_lastAvoidedParticles{0};
+    mutable bool m_derivedStatsDirty{true};
+
+    void recomputeDerivedStats() const;
+    void markDerivedStatsDirty() { m_derivedStatsDirty = true; }
 };
 
 } // namespace optigd::optimization

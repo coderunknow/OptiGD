@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <array>
 #include <chrono>
 #include <mutex>
 #include <vector>
@@ -23,10 +24,32 @@ struct ProfileMetric {
     }
 };
 
+// Metrics recorded on the hot path. Recording by id touches a plain array slot
+// instead of taking a mutex and materialising a std::string key.
+enum class MetricId : uint16_t {
+    VisibilityCuller = 0,
+    ParticleGovernor,
+    TriggerOptimizer,
+    MatrixCache,
+    AdaptiveGovernor,
+    FrameUpdateCpu,
+    OptiGDOverhead,
+
+    Count
+};
+
 class Profiler {
 public:
     static Profiler& instance();
 
+    // Zero-allocation, lock-free fast path.
+    void recordById(MetricId id, double durationUs);
+    ProfileMetric getById(MetricId id) const;
+
+    // Name based lookup. Known names resolve to a MetricId through a small
+    // static table (no allocation, no lock); unknown names fall back to a
+    // mutex guarded overflow map and are intended for ad-hoc instrumentation
+    // only, never for the per-frame path.
     void record(std::string_view name, double durationUs);
     void reset();
 
@@ -39,8 +62,15 @@ public:
 private:
     Profiler() = default;
     mutable std::mutex m_mutex;
+
+    // Indexed by MetricId. Plain (non-atomic) doubles: the game loop that
+    // records these is single threaded, and readers only sample the values for
+    // display. Making this lock-free is what removes the per-record() mutex.
+    std::array<ProfileMetric, static_cast<size_t>(MetricId::Count)> m_fastMetrics{};
     std::unordered_map<std::string, ProfileMetric> m_metrics;
     bool m_enabled{true};
+
+    static bool lookupKnownMetric(std::string_view name, MetricId& outId);
 };
 
 class ProfileScope {

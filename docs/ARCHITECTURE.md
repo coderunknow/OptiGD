@@ -1,4 +1,4 @@
-# OptiGD `v0.1.0-beta1` Architecture Specification
+# OptiGD `v0.1.0-beta.2` Architecture Specification
 
 ## 1. High-Level Overview
 

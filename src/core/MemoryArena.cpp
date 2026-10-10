@@ -128,10 +128,10 @@ void* MemoryArena::allocate(size_t bytes, size_t alignment) {
         }
     }
 
-    // Try subsequent existing blocks if available
+    // Try subsequent existing blocks if available. Their contents are left
+    // untouched: wiping them would silently invalidate live frame-scoped data.
     for (size_t i = m_currentBlockIndex + 1; i < m_blocks.size(); ++i) {
         m_currentBlockIndex = i;
-        m_blocks[i].reset();
         void* ptr = m_blocks[i].allocate(bytes, normAlign, alignedConsumed);
         if (ptr) {
             m_allocationCount++;

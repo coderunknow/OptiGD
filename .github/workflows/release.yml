@@ -24,7 +24,7 @@ jobs:
       - name: Execute Benchmarks
         run: |
           ./build/optigd_benchmark benchmark_release_report.json
-          jq -e '.optigd_version == "0.1.0-beta1"' benchmark_release_report.json
+          jq -e '.optigd_version == "0.1.0-beta.2"' benchmark_release_report.json
           jq -e '.evidence_classification == "[SIMULATED]"' benchmark_release_report.json
       - name: Upload Release Benchmark Report
         uses: actions/upload-artifact@v7

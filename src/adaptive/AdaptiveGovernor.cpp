@@ -167,26 +167,10 @@ void AdaptiveGovernor::evaluateTierAdjustment(core::OptiConfig& config) {
         m_cooldownRemaining = m_hysteresisCooldown; // Reset hysteresis cooldown
         m_tierTransitions++;
 
-        // Apply tier defaults
-        if (newTier == core::PerformanceTier::LowEnd) {
-            config.particleDensityScale = 0.5f;
-            config.maxActiveParticles = 2048;
-            config.cullOffscreenEmitters = true;
-            config.cameraPaddingX = 120.0f;
-            config.cameraPaddingY = 80.0f;
-        } else if (newTier == core::PerformanceTier::Balanced) {
-            config.particleDensityScale = 0.75f;
-            config.maxActiveParticles = 4096;
-            config.cullOffscreenEmitters = true;
-            config.cameraPaddingX = 150.0f;
-            config.cameraPaddingY = 100.0f;
-        } else if (newTier == core::PerformanceTier::HighEnd) {
-            config.particleDensityScale = 1.0f;
-            config.maxActiveParticles = 8192;
-            config.cullOffscreenEmitters = false;
-            config.cameraPaddingX = 200.0f;
-            config.cameraPaddingY = 150.0f;
-        }
+        // Apply tier defaults from the shared table (core::kTierDefaults) so an
+        // automatic transition produces exactly the same settings as selecting
+        // the tier by hand.
+        core::applyTierDefaults(config, newTier);
     }
 }
 

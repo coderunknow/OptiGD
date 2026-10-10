@@ -129,3 +129,136 @@ All 6 jobs in workflow `Build & Verify OptiGD` passed on commit `a3e033e`:
 
 
 
+
+---
+
+## Entry 5 — 2026-10-10: `v0.1.0-beta1` -> `v0.1.0-beta.2` — Loader Defect RCA, Core Audit Fixes & Release
+
+### 5.1 Root Cause: `v0.1.0-beta1` never loaded `[VERIFIED]`
+
+**Symptom**: GD started, OptiGD was absent from the mod list, log showed `unexpected type string`.
+
+**Hypothesis tested and rejected**: that the `tier-preset` setting (`string` + `one-of`)
+triggered it. `loader/src/loader/SettingV3.cpp:980-1019` explicitly supports
+`string` + `one-of`. Do not "fix" this by converting string settings.
+
+**Actual chain** (read from unzipped SDK `v5.10.1` at `/tmp/geode-5.10.1`):
+
+1. `ModMetadataImpl.cpp:288` — `root.needs("version").into(impl->m_version)` (`VersionInfo`).
+2. `matjson::Serialize<VersionInfo>::fromJson` -> `VersionInfo::parse`.
+3. `VersionTag::parse` matches `beta` then leaves `'1'` unconsumed in `-beta1`.
+4. `VersionInfo::parse` -> `Err("Expected end of version, found '1'")`.
+5. `JsonValidation.hpp:105-118` `tryGet<T>()` flattens it to `unexpected type string`.
+6. `LoaderImpl.cpp:626-630` -> `addProblem({InvalidGeodeFile})`, mod skipped.
+
+**Dynamic proof** (`/tmp/verify_version/`, grammar extracted verbatim into a
+standalone harness): `v0.1.0-beta1` and `v0.1.0-beta2` -> ERR;
+`v0.1.0-beta.2`, `v0.1.0-beta.1`, `v0.1.0-beta`, `v0.1.0`, `5.10.1`, `v5.10.1`,
+`v0.1.0-alpha.3` -> OK; `2.2081` -> `Patch version missing`.
+
+**Decision**: version is `v0.1.0-beta.2`. `v0.1.0-beta2` (no dot) reproduces the
+bug; `beta.2` is the only prerelease form Geode accepts that keeps the "beta2"
+designation. Rationale recorded in `src/core/Types.hpp` and enforced by four
+independent guards (ported grammar + unit test + `tools/validate_geode_metadata.py`
++ CI `jq` assertions).
+
+**Evidence separation, as required**: code-level proof is complete; packaging
+proof is complete (`mod.json` passes the validator, CI asserts the shipped
+archive); **in-game confirmation is still `NOT RUN`** — no GD binary, GPU
+context, or Geode loader exists here. The loading defect is not closed as
+"verified in game".
+
+### 5.2 Audit findings fixed
+
+1. **`VisibilityCuller` index/sentinel collision**: `encodeIndex`/`decodeIndex`
+   now offset by `+1` so object index `0` is distinguishable from the
+   `SpatialHash` "no item" sentinel.
+2. **`setCellSize()` mid-level** now rebuilds via a new private
+   `rebuildSpatialIndex()`.
+3. **Culling was irreversible**: added `restoreAllVisibility()` /
+   `hasCulledObjects()` / `getCellSize()`; `PlayLayer` tracks `cullingEngaged`
+   and restores a captured buffer when culling is disabled mid-level.
+4. **`VisibilityCuller` steady-state allocations**: `m_previouslyVisibleIndices`
+   / `m_currentVisibleIndices` member scratch vectors swapped each frame.
+5. **`ParticleGovernor` O(N) derived stats**: `m_currentTotalParticles` and
+   `m_sleepingEmitterCount` maintained incrementally; `getLastAvoidedParticleCount()`
+   made lazy behind a dirty flag; `recalculateParticleTotals()` deleted.
+6. **`MatrixCache` served uncomputed matrices**: added a `computed` flag;
+   `store()` made anchor-aware; `pruneStaleEntries()` added (iterative, detaches
+   children so no dangling pointers).
+7. **`FallbackManager` recovery unreachable during cooldown**: recovery now
+   evaluated every frame; cooldown gates only new fallbacks.
+8. **`CompatibilityLayer` GD gate was `starts_with("2.2")`** (would accept GD
+   `2.21x`): replaced with a numeric comparison against `kTargetGDVersion`.
+9. **`TriggerOptimizer::inspectLookaheadWindow()` mutated execution state**
+   despite being documented non-destructive: now uses `reportedInLookahead`,
+   leaving `activated` / `isCompleted` untouched.
+10. **`Profiler::record()` took a mutex and built a `std::string` key per call**
+    — a per-frame heap allocation contradicting the zero-allocation claim.
+    Added `MetricId` + `recordById()` over a fixed `std::array` (no lock, no
+    allocation); the name API resolves known metrics to the same slots.
+11. **Tier defaults were duplicated** between `ConfigManager::applyTierPresetUnlocked()`
+    and `AdaptiveGovernor::evaluateTierAdjustment()`, so an automatic downgrade
+    could land on different numbers than the same tier picked by hand.
+    Collapsed into `core::kTierDefaults` + `core::applyTierDefaults()` in
+    `Types.hpp`; both consumers now call it, and `Custom` is an explicit no-op.
+12. **Robustness**: guarded numeric parsing in `ConfigManager::deserialize`;
+    `MemoryArena` block reuse no longer destroys live frame-scoped data;
+    `DiagnosticsEngine` escapes all interpolated strings; `psapi.lib` pragma is
+    `_MSC_VER`-guarded.
+
+### 5.3 A bug this work introduced, and the lesson
+
+Adding `reportedInLookahead` to `OptimizedTrigger` initially broke
+`testTriggerOptimizer` (`Spawn group 99 should invoke trigger 4`). Cause:
+`registerTrigger()` used **positional aggregate initialization** with exactly one
+initializer per member, so inserting a field in the middle silently shifted
+`nativePtr` into the wrong slot. Two mitigations applied: the trigger is now
+built field-by-field, and new fields are appended **last** with a comment saying
+why. **Rule for this repo: never add a member in the middle of a struct that is
+aggregate-initialized.**
+
+### 5.4 Diagnostics honesty changes
+
+- Trigger counters report `0` unless `enableTriggerIndexing` is on. Trigger
+  indexing is telemetry-only and never gates native GD execution.
+- `DiagnosticsEngine` now emits a `notes` block:
+  `native_trigger_execution_modified: false`, plus a definition of
+  `total_triggers_skipped`.
+- Per-subsystem timing (`recordCullingTimeUs` / `recordParticleTimeUs` /
+  `recordTriggerTimeUs` / `recordMatrixTimeUs`) added so the overlay and JSON can
+  attribute cost rather than imply it.
+
+### 5.5 New tooling
+
+| Tool | Purpose |
+|---|---|
+| `src/core/GeodeVersion.{hpp,cpp}` | Faithful port of `VersionInfo::parse` / `VersionTag::parse`. |
+| `tools/validate_geode_metadata.py` | `mod.json` vs SDK rules + cross-checks `version`/`geode`/`gd` against `Types.hpp` and `CMakeLists.txt`. |
+| `tools/validate_diagnostics_json.py` | Schema + semantics for the exported diagnostics report. |
+| `tools/validate_benchmark_json.py` | Schema + asserts `[SIMULATED]` and `optigd_heap_allocations == 0`. |
+| `cmake/EmitDiagnosticsReport.cmake`, `cmake/RunBenchmarkSchemaCheck.cmake` | Wire the above into `ctest`. |
+| `optigd_tests --emit-report <path>` | Emits a real diagnostics JSON so the artefact is validated out of process. |
+
+### 5.6 Verification results `[MEASURED]`
+
+- `ctest --output-on-failure`: **4/4 pass** (20/20 unit tests).
+- RelWithDebInfo + `-fsanitize=address,undefined`: full suite and both binaries
+  run clean — no findings, no leaks.
+- Benchmarks (median of 5, Linux x86_64, GCC 12.2.0, `-O3`, seed 42):
+  `5.45x` / `5.36x` / `4.19x`, `81.64%` / `81.34%` / `76.15%` CPU reduction,
+  per-frame heap allocations `0` in every scenario. `[SIMULATED]` — not GD frame
+  times, and not a live-game claim.
+- Docs regenerated (`README.md`, `CHANGELOG.md`, `EVIDENCE_REPORT.md`,
+  `docs/BENCHMARKS.md`, `docs/ARCHITECTURE.md`, `docs/RELEASE_WORKFLOW.md`,
+  `AGENT.md`); `docs/BENCHMARKS.md` numbers came from the rebuilt binary, not
+  hand-editing.
+
+### 5.7 Open items / blockers
+
+1. **Multi-platform `.geode` CI matrix** had not completed at the time of
+   writing; results go in `EVIDENCE_REPORT.md` §7 once available.
+2. **Live in-game validation remains `BLOCKED`.** No Geometry Dash `2.2081`
+   binary, GPU context, or Geode loader in this environment. The beta.1 → beta.2
+   version fix is proven at the grammar and packaging level only; a hardware
+   tester must still confirm the mod appears and runs in game.

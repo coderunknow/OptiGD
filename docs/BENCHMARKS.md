@@ -1,4 +1,4 @@
-# OptiGD `v0.1.0-beta1` Benchmark & Telemetry Guide
+# OptiGD `v0.1.0-beta.2` Benchmark & Telemetry Guide
 
 ## 1. Evidence Classification
 
@@ -18,25 +18,48 @@ cmake --build build --config Release --parallel
 python3 tools/generate_report.py benchmark_results.json
 ```
 
-### Measured Results (Linux x86_64, GCC 12.2.0 `-O3`, Seed `42`)
+### Measured Results (Linux x86_64, GCC 12.2.0 `-O3`, Seed `42`, median of 5 runs)
+
+> Regenerated for `v0.1.0-beta.2` after the `VisibilityCuller` scratch-buffer and
+> `ParticleGovernor` O(1)-totals rework. These are `[SIMULATED]` harness numbers
+> on a shared 2-core CI container; absolute microsecond values move with host
+> load, so the reproducible invariants are the **speedup factor** and the
+> **zero per-frame heap allocations**, not the raw means.
 
 | Scenario | Objects | Emitters | Triggers | Baseline Mean | OptiGD Mean | Baseline P99 | OptiGD P99 | Speedup | CPU Reduction |
 |---|---|---|---|---|---|---|---|---|---|
-| 1. Standard Rated Level (Medium Density) | 4,000 | 40 | 600 | 75.33 us | 11.57 us | 132.89 us | 55.89 us | **6.51x** | **84.64%** |
-| 2. High-Object Extreme Demon (25k Objects) | 25,000 | 180 | 4,000 | 323.26 us | 94.21 us | 438.11 us | 299.81 us | **3.43x** | **70.86%** |
-| 3. Ultra-Dense Mega-Collab Stress (60k Objects) | 60,000 | 350 | 10,000 | 738.62 us | 312.94 us | 961.50 us | 921.49 us | **2.36x** | **57.63%** |
+| 1. Standard Rated Level (Medium Density) | 4,000 | 40 | 600 | 53.43 us | 9.58 us | 89.88 us | 49.22 us | **5.45x** | **81.64%** |
+| 2. High-Object Extreme Demon (25k Objects) | 25,000 | 180 | 4,000 | 322.54 us | 60.07 us | 442.00 us | 201.79 us | **5.36x** | **81.34%** |
+| 3. Ultra-Dense Mega-Collab Stress (60k Objects) | 60,000 | 350 | 10,000 | 724.13 us | 175.55 us | 995.48 us | 502.00 us | **4.19x** | **76.15%** |
 
 | Scenario | Baseline Heap Allocations | OptiGD Per-Frame Heap Allocations | OptiGD Arena Bump Allocations |
 |---|---|---|---|
-| 1. Standard Rated Level (180 frames) | 2,520 | **0** | 360 |
-| 2. High-Object Extreme Demon (180 frames) | 2,700 | **0** | 360 |
-| 3. Ultra-Dense Mega-Collab Stress (120 frames) | 1,920 | **0** | 240 |
+| 1. Standard Rated Level (180 frames) | 1,785 | **0** | 360 |
+| 2. High-Object Extreme Demon (180 frames) | 2,292 | **0** | 360 |
+| 3. Ultra-Dense Mega-Collab Stress (120 frames) | 1,680 | **0** | 240 |
+
+#### Schema validation
+
+Both JSON artefacts are schema-checked in CI so a formatting regression can
+never silently ship a report that downstream tooling cannot parse:
+
+```bash
+ctest --test-dir build --output-on-failure          # runs all four checks
+python3 tools/validate_benchmark_json.py   build/benchmark_results.json
+python3 tools/validate_diagnostics_json.py build/optigd_diagnostics.json
+```
+
+`tools/validate_benchmark_json.py` additionally asserts that
+`evidence_classification` is still `[SIMULATED]`, `benchmark_mode` is
+`synthetic_stress_harness`, and that `optigd_heap_allocations` is `0` for every
+scenario — i.e. a synthetic result can never be laundered into a real-game
+measurement, and a heap-allocation regression fails the build.
 
 ---
 
 ## 3. Real-Game Geometry Dash Comparative Benchmark Protocol `[UNVERIFIED / BLOCKED]`
 
-To validate OptiGD `v0.1.0-beta1` on a Windows x64 PC or Android device running Geometry Dash `2.2081` + Geode `v5.10.1`:
+To validate OptiGD `v0.1.0-beta.2` on a Windows x64 PC or Android device running Geometry Dash `2.2081` + Geode `v5.10.1`:
 
 ### Step 1: Install the `.geode` Package
 Copy `coderunknow.optigd.geode` into your Geode `mods/` directory and launch Geometry Dash `2.2081`.

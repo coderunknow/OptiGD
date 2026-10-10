@@ -11,10 +11,6 @@ bool FallbackManager::checkAndApplyFallbacks(uint64_t currentFrame, const Window
         return false; // User manually overrides fallback logic
     }
 
-    if (m_cooldownRemaining > 0) {
-        m_cooldownRemaining--;
-        return false;
-    }
 
     // Check for severe frame-time variance/jitter regression
     if (stats.stdDevMs > m_varianceThresholdMs && stats.fps > 0.0 && stats.fps < (config.targetFrameRate * 0.8f)) {
@@ -49,6 +45,14 @@ bool FallbackManager::checkAndApplyFallbacks(uint64_t currentFrame, const Window
 
         OPTIGD_LOG_WARN("FallbackManager [" + feature + "]: " + reason + ". Action taken: " + action);
         return true;
+    }
+
+    // The cooldown only gates the *application* of a new fallback. Recovery is
+    // evaluated every frame regardless of the cooldown: gating it too meant a
+    // stabilized workload could never restore its pre-fallback settings while
+    // any cooldown was pending.
+    if (m_cooldownRemaining > 0) {
+        m_cooldownRemaining--;
     }
 
     // Safe recovery path: when variance stabilizes below 50% of threshold and FPS recovers

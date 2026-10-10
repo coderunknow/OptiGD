@@ -10,7 +10,11 @@ ParticleGovernor::ParticleGovernor(float densityScale, uint32_t globalMax)
 
 void ParticleGovernor::setDensityScale(float scale) {
     if (!std::isfinite(scale)) scale = 0.5f;
-    m_densityScale = std::clamp(scale, 0.05f, 1.0f);
+    float clamped = std::clamp(scale, 0.05f, 1.0f);
+    if (clamped != m_densityScale) {
+        m_densityScale = clamped;
+        markDerivedStatsDirty();
+    }
 }
 
 void ParticleGovernor::setGlobalParticleLimit(uint32_t limit) {
@@ -23,8 +27,9 @@ void ParticleGovernor::clear() {
     m_ptrToIndex.clear();
     m_activeEmitterCount = 0;
     m_currentTotalParticles = 0;
-    m_lastCulledEmitters = 0;
+    m_sleepingEmitterCount = 0;
     m_lastAvoidedParticles = 0;
+    m_derivedStatsDirty = true;
 }
 
 uint32_t ParticleGovernor::registerEmitter(uint32_t id, const core::Point2D& pos, float radius,
@@ -111,6 +116,14 @@ bool ParticleGovernor::unregisterEmitter(uint32_t id) {
         m_ptrToIndex.erase(em.nativePtr);
     }
     m_idToIndex.erase(it);
+    if (em.isSleeping && m_sleepingEmitterCount > 0) {
+        m_sleepingEmitterCount--;
+    }
+    if (m_currentTotalParticles >= em.activeParticleCount) {
+        m_currentTotalParticles -= em.activeParticleCount;
+    } else {
+        m_currentTotalParticles = 0;
+    }
     em.active = false;
     em.isSleeping = false;
     em.activeParticleCount = 0;
@@ -119,7 +132,7 @@ bool ParticleGovernor::unregisterEmitter(uint32_t id) {
     if (m_activeEmitterCount > 0) {
         m_activeEmitterCount--;
     }
-    recalculateParticleTotals();
+    markDerivedStatsDirty();
     return true;
 }
 
@@ -156,11 +169,15 @@ EmitterEvaluationResult ParticleGovernor::evaluateEmitterDetailed(
 
     // 1. Critical gameplay particles ALWAYS update at 100% fidelity
     if (emitter.priority == ParticlePriority::Critical) {
-        emitter.isSleeping = false;
         if (wasSleeping) {
+            emitter.isSleeping = false;
+            if (m_sleepingEmitterCount > 0) {
+                m_sleepingEmitterCount--;
+            }
             emitter.justWokeFromSleep = true;
             res.justWokeFromSleep = true;
             res.clampedDt = std::min(res.clampedDt, 1.0f / 60.0f);
+            markDerivedStatsDirty();
         }
         res.shouldUpdate = true;
         res.emissionMultiplier = 1.0f;
@@ -181,25 +198,30 @@ EmitterEvaluationResult ParticleGovernor::evaluateEmitterDetailed(
 
         core::Rect2D paddedCamera = cameraRect.normalized().expanded(120.0f, 120.0f);
         if (!paddedCamera.intersects(emitterBounds)) {
-            emitter.isSleeping = true;
             if (!wasSleeping) {
+                emitter.isSleeping = true;
+                m_sleepingEmitterCount++;
                 emitter.justEnteredSleep = true;
                 res.justEnteredSleep = true;
             }
             res.shouldUpdate = false;
             res.emissionMultiplier = 0.0f;
             res.effectiveEmissionRate = 0.0f;
-            recalculateParticleTotals();
+            markDerivedStatsDirty();
             return res;
         }
     }
 
-    emitter.isSleeping = false;
     if (wasSleeping) {
+        emitter.isSleeping = false;
+        if (m_sleepingEmitterCount > 0) {
+            m_sleepingEmitterCount--;
+        }
         emitter.justWokeFromSleep = true;
         res.justWokeFromSleep = true;
         // Clamp dt on wake to prevent a multi-frame emission burst
         res.clampedDt = std::min(res.clampedDt, 1.0f / 60.0f);
+        markDerivedStatsDirty();
     }
 
     // 3. Apply non-compounding density scaling
@@ -230,30 +252,31 @@ bool ParticleGovernor::evaluateEmitter(uint32_t id, const core::Rect2D& cameraRe
     return res.shouldUpdate;
 }
 
-void ParticleGovernor::recalculateParticleTotals() {
-    uint32_t total = 0;
-    uint32_t culled = 0;
+uint32_t ParticleGovernor::getLastAvoidedParticleCount() const {
+    if (m_derivedStatsDirty) {
+        recomputeDerivedStats();
+    }
+    return m_lastAvoidedParticles;
+}
+
+void ParticleGovernor::recomputeDerivedStats() const {
     uint32_t avoided = 0;
 
     for (const auto& em : m_emitters) {
         if (!em.active) continue;
         if (em.isSleeping) {
-            culled++;
             avoided += std::max<uint32_t>(em.activeParticleCount, 32);
-        } else {
-            total += em.activeParticleCount;
-            if (em.priority != ParticlePriority::Critical && m_densityScale < 1.0f) {
-                float fullCount = static_cast<float>(em.activeParticleCount) / m_densityScale;
-                if (fullCount > static_cast<float>(em.activeParticleCount)) {
-                    avoided += static_cast<uint32_t>(fullCount - static_cast<float>(em.activeParticleCount));
-                }
+        } else if (em.priority != ParticlePriority::Critical && m_densityScale > 0.0f &&
+                   m_densityScale < 1.0f) {
+            float fullCount = static_cast<float>(em.activeParticleCount) / m_densityScale;
+            if (fullCount > static_cast<float>(em.activeParticleCount)) {
+                avoided += static_cast<uint32_t>(fullCount - static_cast<float>(em.activeParticleCount));
             }
         }
     }
 
-    m_currentTotalParticles = total;
-    m_lastCulledEmitters = culled;
     m_lastAvoidedParticles = avoided;
+    m_derivedStatsDirty = false;
 }
 
 void ParticleGovernor::recordActiveParticles(uint32_t emitterId, uint32_t count) {
@@ -267,10 +290,20 @@ void ParticleGovernor::recordActiveParticles(uint32_t emitterId, uint32_t count)
         }
     }
     if (idx < m_emitters.size() && m_emitters[idx].active) {
-        m_emitters[idx].activeParticleCount = count;
+        auto& em = m_emitters[idx];
+        uint32_t previous = em.activeParticleCount;
+        em.activeParticleCount = count;
+        // O(1) running-total maintenance (replaces the previous O(N) rescan
+        // that ran once per emitter per frame).
+        if (count >= previous) {
+            m_currentTotalParticles += (count - previous);
+        } else if (m_currentTotalParticles >= (previous - count)) {
+            m_currentTotalParticles -= (previous - count);
+        } else {
+            m_currentTotalParticles = 0;
+        }
+        markDerivedStatsDirty();
     }
-
-    recalculateParticleTotals();
 }
 
 const ParticleEmitterInfo* ParticleGovernor::getEmitterInfo(uint32_t id) const {

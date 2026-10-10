@@ -3,8 +3,52 @@
 #include <sstream>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace optigd::config {
+
+namespace {
+
+// Persisted configuration is user-editable text and may be truncated, merged or
+// written by an older OptiGD build. Every conversion is therefore guarded so a
+// malformed line is skipped instead of throwing out of the loader.
+bool parseInt(std::string const& text, int& out) {
+    try {
+        size_t consumed = 0;
+        int value = std::stoi(text, &consumed);
+        if (consumed != text.size()) return false;
+        out = value;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseFloat(std::string const& text, float& out) {
+    try {
+        size_t consumed = 0;
+        float value = std::stof(text, &consumed);
+        if (consumed != text.size()) return false;
+        out = value;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseUnsigned(std::string const& text, uint32_t& out) {
+    try {
+        size_t consumed = 0;
+        unsigned long value = std::stoul(text, &consumed);
+        if (consumed != text.size()) return false;
+        out = static_cast<uint32_t>(value);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+} // namespace
 
 ConfigManager::ConfigManager() {
     resetToDefaults();
@@ -46,26 +90,10 @@ void ConfigManager::setConfig(const core::OptiConfig& config) {
 
 void ConfigManager::applyTierPresetUnlocked(core::PerformanceTier tier) {
     m_config.tier = tier;
-    if (tier == core::PerformanceTier::LowEnd) {
-        m_config.particleDensityScale = 0.5f;
-        m_config.maxActiveParticles = 2048;
-        m_config.cullOffscreenEmitters = true;
-        m_config.cameraPaddingX = 120.0f;
-        m_config.cameraPaddingY = 80.0f;
-    } else if (tier == core::PerformanceTier::Balanced) {
-        m_config.particleDensityScale = 0.75f;
-        m_config.maxActiveParticles = 4096;
-        m_config.cullOffscreenEmitters = true;
-        m_config.cameraPaddingX = 150.0f;
-        m_config.cameraPaddingY = 100.0f;
-    } else if (tier == core::PerformanceTier::HighEnd) {
-        m_config.particleDensityScale = 1.0f;
-        m_config.maxActiveParticles = 8192;
-        m_config.cullOffscreenEmitters = false;
-        m_config.cameraPaddingX = 200.0f;
-        m_config.cameraPaddingY = 150.0f;
-    }
-    // For PerformanceTier::Custom, preserve existing custom numeric values
+    // Single source of truth: see core::kTierDefaults in Types.hpp.
+    // For PerformanceTier::Custom this is a no-op and existing custom numeric
+    // values are preserved.
+    core::applyTierDefaults(m_config, tier);
 }
 
 void ConfigManager::applyTierPreset(core::PerformanceTier tier) {
@@ -145,13 +173,13 @@ bool ConfigManager::deserialize(const std::string& serializedData) {
         parsedAny = true;
 
         if (key == "tier") {
-            int t = std::stoi(val);
-            if (t >= 0 && t <= 3) {
+            int t = 0;
+            if (parseInt(val, t) && t >= 0 && t <= 3) {
                 m_config.tier = static_cast<core::PerformanceTier>(t);
             }
         } else if (key == "targetFps") {
-            float fps = std::stof(val);
-            if (fps > 0.0f && std::isfinite(fps)) {
+            float fps = 0.0f;
+            if (parseFloat(val, fps) && fps > 0.0f && std::isfinite(fps)) {
                 m_config.targetFrameRate = fps;
                 m_config.targetFrameTimeMs = 1000.0f / fps;
             }
@@ -170,15 +198,27 @@ bool ConfigManager::deserialize(const std::string& serializedData) {
         } else if (key == "exportDiagnosticsOnExit") {
             m_config.flags.exportDiagnosticsOnExit = (val == "1");
         } else if (key == "particleDensityScale") {
-            m_config.particleDensityScale = std::clamp(std::stof(val), 0.05f, 1.0f);
+            float density = 0.0f;
+            if (parseFloat(val, density) && std::isfinite(density)) {
+                m_config.particleDensityScale = std::clamp(density, 0.05f, 1.0f);
+            }
         } else if (key == "maxActiveParticles") {
-            m_config.maxActiveParticles = static_cast<uint32_t>(std::stoul(val));
+            uint32_t cap = 0;
+            if (parseUnsigned(val, cap)) {
+                m_config.maxActiveParticles = cap;
+            }
         } else if (key == "cullOffscreenEmitters") {
             m_config.cullOffscreenEmitters = (val == "1");
         } else if (key == "cameraPaddingX") {
-            m_config.cameraPaddingX = std::stof(val);
+            float padX = 0.0f;
+            if (parseFloat(val, padX) && std::isfinite(padX)) {
+                m_config.cameraPaddingX = padX;
+            }
         } else if (key == "cameraPaddingY") {
-            m_config.cameraPaddingY = std::stof(val);
+            float padY = 0.0f;
+            if (parseFloat(val, padY) && std::isfinite(padY)) {
+                m_config.cameraPaddingY = padY;
+            }
         }
     }
     return parsedAny;
