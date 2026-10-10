@@ -1,5 +1,6 @@
 #include "OptiGDManager.hpp"
 #include "Logger.hpp"
+#include "GeodeVersion.hpp"
 
 namespace optigd::core {
 
@@ -19,6 +20,16 @@ OptiGDManager& OptiGDManager::instance() {
 
 void OptiGDManager::initialize(std::string_view gdVersion, std::string_view geodeVersion) {
     if (m_initialized) return;
+
+    // Startup safety net: the mod.json `version` tag must satisfy Geode's
+    // VersionInfo grammar or the loader refuses to load the mod and reports
+    // only "unexpected type string". Catch that class of mistake loudly here.
+    if (!core::geodever::isValidGeodeVersionString(core::kOptiGDVersionTag)) {
+        auto parsed = core::geodever::parseVersionString(core::kOptiGDVersionTag);
+        OPTIGD_LOG_ERROR(std::string("OptiGD version tag '") + core::kOptiGDVersionTag +
+                         "' is not a valid Geode version string: " + parsed.error +
+                         ". Geode will fail to load this mod; fix mod.json / Types.hpp.");
+    }
 
     OPTIGD_LOG_INFO(std::string("Initializing OptiGD v") + std::string(kOptiGDVersion) +
                     " Performance Engine...");
@@ -116,9 +127,19 @@ void OptiGDManager::endFrame() {
         m_currentStats.culledParticles = m_particleGovernor.getLastCulledEmitterCount() * 32;
     }
 
-    m_currentStats.totalTriggers = static_cast<uint32_t>(m_triggerOptimizer.getTotalTriggers());
-    m_currentStats.evaluatedTriggers = static_cast<uint32_t>(m_triggerOptimizer.getLastEvaluatedCount());
-    m_currentStats.executedTriggers = static_cast<uint32_t>(m_triggerOptimizer.getLastExecutedCount());
+    // TriggerOptimizer only ever *measures* the lookahead window; it never
+    // gates or replaces native Geometry Dash trigger execution. Report its
+    // counters as zero unless the indexing feature is actually enabled so the
+    // diagnostics report cannot imply triggers were skipped when none were.
+    if (m_activeConfig.flags.enableTriggerIndexing) {
+        m_currentStats.totalTriggers = static_cast<uint32_t>(m_triggerOptimizer.getTotalTriggers());
+        m_currentStats.evaluatedTriggers = static_cast<uint32_t>(m_triggerOptimizer.getLastEvaluatedCount());
+        m_currentStats.executedTriggers = static_cast<uint32_t>(m_triggerOptimizer.getLastExecutedCount());
+    } else {
+        m_currentStats.totalTriggers = 0;
+        m_currentStats.evaluatedTriggers = 0;
+        m_currentStats.executedTriggers = 0;
+    }
 
     uint64_t curHits = optimization::MatrixCache::instance().getHits();
     uint64_t curMisses = optimization::MatrixCache::instance().getMisses();
@@ -158,19 +179,25 @@ void OptiGDManager::endFrame() {
     m_currentStats.optigdOverheadUs = m_frameOptigdOverheadUs + m_currentStats.governorTimeUs;
 
     if (profiling::Profiler::instance().isEnabled()) {
-        profiling::Profiler::instance().record("FrameUpdateCpu", m_currentStats.updateCpuTimeUs);
-        profiling::Profiler::instance().record("OptiGDOverhead", m_currentStats.optigdOverheadUs);
+        profiling::Profiler::instance().recordById(profiling::MetricId::FrameUpdateCpu,
+                                                   m_currentStats.updateCpuTimeUs);
+        profiling::Profiler::instance().recordById(profiling::MetricId::OptiGDOverhead,
+                                                   m_currentStats.optigdOverheadUs);
         if (m_currentStats.cullingTimeUs > 0.0) {
-            profiling::Profiler::instance().record("VisibilityCuller", m_currentStats.cullingTimeUs);
+            profiling::Profiler::instance().recordById(profiling::MetricId::VisibilityCuller,
+                                                       m_currentStats.cullingTimeUs);
         }
         if (m_currentStats.particleTimeUs > 0.0) {
-            profiling::Profiler::instance().record("ParticleGovernor", m_currentStats.particleTimeUs);
+            profiling::Profiler::instance().recordById(profiling::MetricId::ParticleGovernor,
+                                                       m_currentStats.particleTimeUs);
         }
         if (m_currentStats.triggerTimeUs > 0.0) {
-            profiling::Profiler::instance().record("TriggerOptimizer", m_currentStats.triggerTimeUs);
+            profiling::Profiler::instance().recordById(profiling::MetricId::TriggerOptimizer,
+                                                       m_currentStats.triggerTimeUs);
         }
         if (m_currentStats.governorTimeUs > 0.0) {
-            profiling::Profiler::instance().record("AdaptiveGovernor", m_currentStats.governorTimeUs);
+            profiling::Profiler::instance().recordById(profiling::MetricId::AdaptiveGovernor,
+                                                       m_currentStats.governorTimeUs);
         }
     }
 

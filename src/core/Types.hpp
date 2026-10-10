@@ -8,8 +8,13 @@
 
 namespace optigd::core {
 
-inline constexpr const char* kOptiGDVersion = "0.1.0-beta1";
-inline constexpr const char* kOptiGDVersionTag = "v0.1.0-beta1";
+// NOTE: The version tag MUST satisfy Geode 5.10.1's VersionInfo grammar
+// (`vMAJOR.MINOR.PATCH[-alpha|-beta|-prerelease][.N]`). A digit directly
+// attached to the tag (e.g. `v0.1.0-beta1`) is REJECTED by the loader and
+// surfaces only as "unexpected type string". See GeodeVersion.hpp for the
+// full root-cause analysis and the regression test in tests/UnitTests.cpp.
+inline constexpr const char* kOptiGDVersion = "0.1.0-beta.2";
+inline constexpr const char* kOptiGDVersionTag = "v0.1.0-beta.2";
 inline constexpr const char* kTargetGDVersion = "2.2081";
 inline constexpr const char* kTargetGeodeVersion = "v5.10.1";
 
@@ -103,6 +108,43 @@ inline const char* tierToString(PerformanceTier tier) {
         case PerformanceTier::Custom: return "Custom";
         default: return "Unknown";
     }
+}
+
+// The one and only tier defaults table.
+//
+// `ConfigManager::applyTierPresetUnlocked()` and
+// `AdaptiveGovernor::evaluateTierAdjustment()` used to carry independent copies
+// of these numbers, which could drift apart and make an automatic tier
+// transition apply different settings than the same tier selected by hand.
+// Both now go through this table; `Custom` is a no-op so user values are kept.
+struct TierDefaults {
+    float particleDensityScale;
+    uint32_t maxActiveParticles;
+    bool cullOffscreenEmitters;
+    float cameraPaddingX;
+    float cameraPaddingY;
+};
+
+constexpr TierDefaults kTierDefaults[] = {
+    /* LowEnd   */ {0.5f,  2048, true,  120.0f, 80.0f},
+    /* Balanced */ {0.75f, 4096, true,  150.0f, 100.0f},
+    /* HighEnd  */ {1.0f,  8192, false, 200.0f, 150.0f},
+    /* Custom   */ {1.0f,  8192, false, 200.0f, 150.0f},
+};
+
+// Applies the table entry for `tier` to a config. `Custom` is intentionally a
+// no-op: custom tiers preserve whatever the user configured.
+template <typename ConfigT>
+inline void applyTierDefaults(ConfigT& config, PerformanceTier tier) {
+    if (tier == PerformanceTier::Custom) {
+        return;
+    }
+    const TierDefaults& defaults = kTierDefaults[static_cast<size_t>(tier)];
+    config.particleDensityScale = defaults.particleDensityScale;
+    config.maxActiveParticles = defaults.maxActiveParticles;
+    config.cullOffscreenEmitters = defaults.cullOffscreenEmitters;
+    config.cameraPaddingX = defaults.cameraPaddingX;
+    config.cameraPaddingY = defaults.cameraPaddingY;
 }
 
 struct OptimizationFlags {

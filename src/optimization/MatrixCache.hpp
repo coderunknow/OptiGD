@@ -65,6 +65,10 @@ struct CachedTransform {
     float lastScaleY{1.0f};
     float lastAnchorX{0.0f};
     float lastAnchorY{0.0f};
+    // False for entries that were created implicitly (e.g. by setParent) and
+    // whose `matrix` has never been computed from real node parameters.
+    // Such entries must never satisfy a getCached() lookup.
+    bool computed{false};
     void* parentPtr{nullptr};
     std::vector<void*> children;
 };
@@ -79,7 +83,13 @@ public:
     void setParent(void* childPtr, void* parentPtr);
 
     bool getCached(void* nodePtr, float px, float py, float rot, float sx, float sy, AffineMatrix& outMatrix);
-    void store(void* nodePtr, float px, float py, float rot, float sx, float sy, const AffineMatrix& matrix);
+    void store(void* nodePtr, float px, float py, float rot, float sx, float sy, const AffineMatrix& matrix,
+               float anchorX = 0.0f, float anchorY = 0.0f);
+
+    // Drops entries that were created implicitly by setParent() and never had a
+    // matrix computed. Without this the cache grows without bound for node
+    // graphs whose parents are linked but never transformed.
+    size_t pruneStaleEntries();
 
     // Computes or retrieves cached local transform
     AffineMatrix getOrCompute(void* nodePtr, float px, float py, float rot,

@@ -24,6 +24,58 @@ int CompatibilityLayer::parseMajorVersion(std::string_view ver) {
     return hasDigit ? major : -1;
 }
 
+bool CompatibilityLayer::parseVersionComponents(std::string_view ver, int& major, int& minor, int& patch) {
+    major = minor = patch = -1;
+
+    size_t i = 0;
+    while (i < ver.size() && (ver[i] == 'v' || ver[i] == 'V' || ver[i] == ' ')) {
+        i++;
+    }
+
+    int* out[3] = {&major, &minor, &patch};
+    for (int part = 0; part < 3; ++part) {
+        int value = 0;
+        bool hasDigit = false;
+        while (i < ver.size() && std::isdigit(static_cast<unsigned char>(ver[i]))) {
+            hasDigit = true;
+            value = value * 10 + (ver[i] - '0');
+            i++;
+        }
+        if (!hasDigit) {
+            return part > 0; // trailing components are optional
+        }
+        *out[part] = value;
+        if (part < 2) {
+            if (i >= ver.size() || ver[i] != '.') {
+                return true;
+            }
+            i++; // consume '.'
+        }
+    }
+    return true;
+}
+
+bool CompatibilityLayer::isSupportedGDVersion(std::string_view gdVersion) {
+    if (gdVersion == "*") {
+        return true; // explicit opt-out used by the standalone harness
+    }
+
+    int targetMajor = 0, targetMinor = 0, targetPatch = 0;
+    if (!parseVersionComponents(core::kTargetGDVersion, targetMajor, targetMinor, targetPatch)) {
+        return false;
+    }
+
+    int major = 0, minor = 0, patch = 0;
+    if (!parseVersionComponents(gdVersion, major, minor, patch)) {
+        return false;
+    }
+
+    // GD 2.2081 is "major.minor" - it has no patch component, so a missing
+    // patch is expected and is not treated as a mismatch.
+    return major == targetMajor && minor == targetMinor &&
+           (patch == targetPatch || patch < 0 || targetPatch < 0);
+}
+
 void CompatibilityLayer::initialize(std::string_view gdVersion, std::string_view geodeVersion) {
     m_gdVersion = gdVersion.empty() ? std::string(core::kTargetGDVersion) : std::string(gdVersion);
     m_geodeVersion = geodeVersion.empty() ? std::string(core::kTargetGeodeVersion) : std::string(geodeVersion);
@@ -38,7 +90,7 @@ void CompatibilityLayer::initialize(std::string_view gdVersion, std::string_view
     registerFeature("diagnostics_overlay", "In-Game Diagnostics HUD");
 
     int geodeMajor = parseMajorVersion(m_geodeVersion);
-    bool gdOk = (m_gdVersion == "*" || m_gdVersion.rfind("2.2", 0) == 0);
+    bool gdOk = isSupportedGDVersion(m_gdVersion);
     bool geodeOk = (geodeMajor >= 4);
     m_environmentCompatible = gdOk && geodeOk;
 

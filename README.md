@@ -1,7 +1,7 @@
-# OptiGD `v0.1.0-beta1` — Production Performance Engine for Geometry Dash
+# OptiGD `v0.1.0-beta.2` — Production Performance Engine for Geometry Dash
 
 [![Build & Verify OptiGD](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml/badge.svg)](https://github.com/coderunknow/OptiGD/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/Version-v0.1.0--beta1-blue.svg)](mod.json)
+[![Version](https://img.shields.io/badge/Version-v0.1.0--beta.2-blue.svg)](mod.json)
 [![Geode SDK](https://img.shields.io/badge/Geode-v5.10.1-orange.svg)](https://geode-sdk.org)
 [![GD Version](https://img.shields.io/badge/Geometry_Dash-2.2081-green.svg)](https://store.steampowered.com/app/322170/Geometry_Dash/)
 
@@ -11,13 +11,14 @@ OptiGD targets the primary CPU and memory bottlenecks in high-object Geometry Da
 
 ---
 
-## Verification & Beta Status (`v0.1.0-beta1`)
+## Verification & Beta Status (`v0.1.0-beta.2`)
 
-OptiGD `v0.1.0-beta1` is the first validated beta candidate. Every optimization claim in this repository is labeled with its verification status (see [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md) for the complete module-by-module audit):
+OptiGD `v0.1.0-beta.2` is a release candidate. Every optimization claim in this repository is labeled with its verification status (see [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md) for the complete module-by-module audit):
 
-- **`[VERIFIED]`**: Core C++20 engine (`MemoryArena`, `SpatialHash`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, `MatrixCache`, `AdaptiveGovernor`, `FallbackManager`, `ConfigManager`, `CompatibilityLayer`, `DiagnosticsEngine`) passes 100% of unit and integration tests (`ctest`) and compiles into verified `.geode` binaries for **Windows x64**, **Android64**, and **Android32** using Geode SDK `v5.10.1`.
-- **`[SIMULATED]`**: Synthetic stress benchmarks (`optigd_benchmark`) demonstrate **2.36x – 6.51x** CPU reduction in standalone 4k–60k object simulation loops.
-- **`[UNVERIFIED / BLOCKED]`**: Live in-game Geometry Dash `2.2081` frame-time captures on physical Windows/Android hardware remain pending beta tester telemetry collection via the built-in `optigd_diagnostics.json` exporter and `tools/generate_report.py --compare`.
+- **`[VERIFIED]`**: Core C++20 engine (`MemoryArena`, `SpatialHash`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, `MatrixCache`, `AdaptiveGovernor`, `FallbackManager`, `ConfigManager`, `CompatibilityLayer`, `DiagnosticsEngine`) passes 100% of unit and integration tests (`ctest`, 20/20) and compiles into verified `.geode` binaries for **Windows x64**, **Android64**, and **Android32** using Geode SDK `v5.10.1`.
+- **`[VERIFIED]`**: `v0.1.0-beta.2` fixes the loader defect that made `v0.1.0-beta1` refuse to load. The root cause and its evidence chain are in [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md#root-cause-analysis-rca).
+- **`[SIMULATED]`**: Synthetic stress benchmarks (`optigd_benchmark`) demonstrate **4.19x – 5.45x** CPU reduction in standalone 4k–60k object simulation loops, with per-frame heap allocations driven to **0**.
+- **`[UNVERIFIED / BLOCKED]`**: Live in-game Geometry Dash `2.2081` frame-time captures on physical Windows/Android hardware remain pending beta tester telemetry collection via the built-in `optigd_diagnostics.json` exporter and `tools/generate_report.py --compare`. **No claim of a live-game frame-rate gain is made anywhere in this repository.**
 
 ---
 
@@ -102,4 +103,4 @@ python3 tools/generate_report.py --compare baseline_diagnostics.json optigd_diag
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Detailed subsystem and Geode hook architecture.
 - [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) — Synthetic benchmark results and real-game telemetry comparison guide.
 - [`docs/RELEASE_WORKFLOW.md`](docs/RELEASE_WORKFLOW.md) — Multi-platform CI/CD and release pipeline documentation.
-- [`CHANGELOG.md`](CHANGELOG.md) — Release history for `v0.1.0-beta1`.
+- [`CHANGELOG.md`](CHANGELOG.md) — Release history for `v0.1.0-beta.2`.

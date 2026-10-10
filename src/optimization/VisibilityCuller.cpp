@@ -7,8 +7,26 @@ namespace optigd::optimization {
 VisibilityCuller::VisibilityCuller(float cellSize)
     : m_spatialHash(cellSize) {}
 
+void VisibilityCuller::rebuildSpatialIndex() {
+    m_spatialHash.clear();
+    for (uint32_t idx = 0; idx < m_objects.size(); ++idx) {
+        auto& obj = m_objects[idx];
+        if (!obj.active) {
+            continue;
+        }
+        obj.spatialId = m_spatialHash.insert(obj.bounds, encodeIndex(idx));
+    }
+}
+
 void VisibilityCuller::setCellSize(float cellSize) {
-    m_spatialHash.setCellSize(cellSize);
+    float normalized = (cellSize > 0.0f && std::isfinite(cellSize)) ? cellSize : 128.0f;
+    if (std::abs(normalized - m_spatialHash.getCellSize()) <= 0.0001f) {
+        return; // No-op: avoids destroying a perfectly good spatial index.
+    }
+    m_spatialHash.setCellSize(normalized);
+    // setCellSize() empties the SpatialHash; re-register every live object so
+    // queries keep working instead of reporting "nothing visible".
+    rebuildSpatialIndex();
     m_cameraCached = false;
 }
 
@@ -24,7 +42,9 @@ void VisibilityCuller::clear() {
     m_idToIndex.clear();
     m_ptrToIndex.clear();
     m_previouslyVisibleIndices.clear();
+    m_currentVisibleIndices.clear();
     m_activeObjectCount = 0;
+    m_culledByOptiGD = 0;
     m_currentFrameStamp = 1;
     m_lastCulledCount = 0;
     m_lastVisibleCount = 0;
@@ -52,7 +72,7 @@ uint32_t VisibilityCuller::registerObject(uint32_t id, const core::Rect2D& bound
     }
 
     uint32_t objIndex = static_cast<uint32_t>(m_objects.size());
-    uint32_t spatialId = m_spatialHash.insert(bounds, reinterpret_cast<void*>(static_cast<uintptr_t>(objIndex)));
+    uint32_t spatialId = m_spatialHash.insert(bounds, encodeIndex(objIndex));
 
     RenderObject obj{};
     obj.id = id;
@@ -117,6 +137,9 @@ bool VisibilityCuller::unregisterObject(uint32_t id) {
         m_ptrToIndex.erase(obj.nativePtr);
     }
     m_idToIndex.erase(it);
+    if (!obj.isVisible && m_culledByOptiGD > 0) {
+        m_culledByOptiGD--;
+    }
     obj.active = false;
     obj.isVisible = false;
     obj.nativePtr = nullptr;
@@ -152,19 +175,29 @@ size_t VisibilityCuller::cullAgainstCamera(const core::Rect2D& cameraRect, std::
     }
 
     core::Rect2D queryRect = cameraRect.normalized().expanded(m_padX, m_padY);
-    std::vector<uint32_t> visibleSpatialIds;
-    visibleSpatialIds.reserve(256);
-    m_spatialHash.queryIDs(queryRect, visibleSpatialIds);
+
+    m_currentVisibleIndices.clear();
+    {
+        std::vector<void*> raw;
+        m_spatialHash.query(queryRect, raw);
+        m_currentVisibleIndices.reserve(raw.size());
+        for (void* ud : raw) {
+            uint32_t idx = decodeIndex(ud);
+            if (idx < m_objects.size()) {
+                m_currentVisibleIndices.push_back(idx);
+            }
+        }
+    }
 
     size_t newlyVis = 0;
-    for (uint32_t spatialId : visibleSpatialIds) {
-        if (spatialId >= m_objects.size()) continue;
-        auto& obj = m_objects[spatialId];
+    for (uint32_t idx : m_currentVisibleIndices) {
+        auto& obj = m_objects[idx];
         if (!obj.active) continue;
         obj.lastSeenStamp = m_currentFrameStamp;
         if (!obj.isVisible) {
             obj.isVisible = true;
             newlyVis++;
+            if (m_culledByOptiGD > 0) m_culledByOptiGD--;
         }
         outVisibleObjects.push_back(obj.nativePtr);
     }
@@ -175,6 +208,7 @@ size_t VisibilityCuller::cullAgainstCamera(const core::Rect2D& cameraRect, std::
             auto& obj = m_objects[idx];
             if (obj.active && obj.lastSeenStamp != m_currentFrameStamp && obj.isVisible) {
                 obj.isVisible = false;
+                m_culledByOptiGD++;
                 newlyCulled++;
             }
         }
@@ -184,13 +218,15 @@ size_t VisibilityCuller::cullAgainstCamera(const core::Rect2D& cameraRect, std::
                 auto& obj = m_objects[prevIdx];
                 if (obj.active && obj.lastSeenStamp != m_currentFrameStamp && obj.isVisible) {
                     obj.isVisible = false;
+                    m_culledByOptiGD++;
                     newlyCulled++;
                 }
             }
         }
     }
 
-    m_previouslyVisibleIndices = std::move(visibleSpatialIds);
+    m_previouslyVisibleIndices.swap(m_currentVisibleIndices);
+    m_currentVisibleIndices.clear();
     m_lastVisibleCount = outVisibleObjects.size();
     m_lastCulledCount = (m_activeObjectCount >= m_lastVisibleCount)
                             ? (m_activeObjectCount - m_lastVisibleCount)
@@ -230,22 +266,27 @@ VisibilityDeltaResult VisibilityCuller::evaluateVisibilityDelta(
     }
 
     core::Rect2D queryRect = cameraRect.normalized().expanded(m_padX, m_padY);
-    uint32_t* visibleSpatialIds = nullptr;
-    size_t rawCount = m_spatialHash.queryIDsArena(queryRect, arena, visibleSpatialIds);
+    void** visibleUserData = nullptr;
+    size_t rawCount = m_spatialHash.queryArena(queryRect, arena, visibleUserData);
+
+    m_currentVisibleIndices.clear();
+    m_currentVisibleIndices.reserve(rawCount);
 
     size_t validVisible = 0;
     size_t newlyVis = 0;
     for (size_t i = 0; i < rawCount; ++i) {
-        uint32_t idx = visibleSpatialIds[i];
+        uint32_t idx = decodeIndex(visibleUserData[i]);
         if (idx >= m_objects.size()) continue;
         auto& obj = m_objects[idx];
         if (!obj.active) continue;
 
         validVisible++;
+        m_currentVisibleIndices.push_back(idx);
         obj.lastSeenStamp = m_currentFrameStamp;
         if (!obj.isVisible) {
             obj.isVisible = true;
             newlyVis++;
+            if (m_culledByOptiGD > 0) m_culledByOptiGD--;
             if (outNewlyVisibleDecorative && obj.isDecorative && obj.nativePtr) {
                 outNewlyVisibleDecorative->push_back(obj.nativePtr);
             }
@@ -259,6 +300,7 @@ VisibilityDeltaResult VisibilityCuller::evaluateVisibilityDelta(
             auto& obj = m_objects[idx];
             if (obj.active && obj.lastSeenStamp != m_currentFrameStamp && obj.isVisible) {
                 obj.isVisible = false;
+                m_culledByOptiGD++;
                 newlyCulled++;
                 if (outNewlyCulledDecorative && obj.isDecorative && obj.nativePtr) {
                     outNewlyCulledDecorative->push_back(obj.nativePtr);
@@ -271,6 +313,7 @@ VisibilityDeltaResult VisibilityCuller::evaluateVisibilityDelta(
                 auto& obj = m_objects[prevIdx];
                 if (obj.active && obj.lastSeenStamp != m_currentFrameStamp && obj.isVisible) {
                     obj.isVisible = false;
+                    m_culledByOptiGD++;
                     newlyCulled++;
                     if (outNewlyCulledDecorative && obj.isDecorative && obj.nativePtr) {
                         outNewlyCulledDecorative->push_back(obj.nativePtr);
@@ -280,7 +323,8 @@ VisibilityDeltaResult VisibilityCuller::evaluateVisibilityDelta(
         }
     }
 
-    m_previouslyVisibleIndices.assign(visibleSpatialIds, visibleSpatialIds + rawCount);
+    m_previouslyVisibleIndices.swap(m_currentVisibleIndices);
+    m_currentVisibleIndices.clear();
     m_lastVisibleCount = validVisible;
     m_lastCulledCount = (m_activeObjectCount >= validVisible) ? (m_activeObjectCount - validVisible) : 0;
     m_lastNewlyVisibleCount = newlyVis;
@@ -293,6 +337,33 @@ VisibilityDeltaResult VisibilityCuller::evaluateVisibilityDelta(
     res.newlyVisibleCount = newlyVis;
     res.newlyCulledCount = newlyCulled;
     return res;
+}
+
+size_t VisibilityCuller::restoreAllVisibility(std::vector<void*>* outRestoredPointers,
+                                              bool decorativeOnly) {
+    size_t restored = 0;
+    for (auto& obj : m_objects) {
+        if (!obj.active || obj.isVisible) continue;
+        if (decorativeOnly && !obj.isDecorative) continue;
+        obj.isVisible = true;
+        restored++;
+        if (m_culledByOptiGD > 0) m_culledByOptiGD--;
+        if (outRestoredPointers && obj.nativePtr) {
+            outRestoredPointers->push_back(obj.nativePtr);
+        }
+    }
+    // Reset differential tracking so a later re-enable starts from a clean,
+    // fully-visible baseline rather than replaying stale transitions.
+    m_previouslyVisibleIndices.clear();
+    for (auto& obj : m_objects) {
+        obj.lastSeenStamp = 0;
+    }
+    m_currentFrameStamp = 1;
+    m_cameraCached = false;
+    m_lastCulledCount = 0;
+    m_lastNewlyVisibleCount = 0;
+    m_lastNewlyCulledCount = 0;
+    return restored;
 }
 
 const RenderObject* VisibilityCuller::getObjectById(uint32_t id) const {

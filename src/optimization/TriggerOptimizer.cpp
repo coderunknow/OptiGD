@@ -30,6 +30,7 @@ void TriggerOptimizer::resetTriggerStates() {
     for (auto& trig : m_triggers) {
         trig.activated = false;
         trig.isCompleted = false;
+        trig.reportedInLookahead = false;
         trig.enabled = true;
     }
     m_disabledGroups.clear();
@@ -47,19 +48,23 @@ void TriggerOptimizer::registerTrigger(uint32_t id, uint32_t groupID, TriggerTyp
     if (effectiveBounds.size.width <= 0.0f && effectiveBounds.size.height <= 0.0f) {
         effectiveBounds = core::Rect2D(triggerX - 15.0f, 0.0f, 30.0f, 2000.0f);
     }
-    m_triggers.push_back({
-        id,
-        groupID,
-        type,
-        triggerX,
-        effectiveBounds.normalized(),
-        spawnOrder,
-        isMultiTriggered,
-        true,
-        false,
-        false,
-        nativePtr
-    });
+    // Assign field by field: a positional aggregate initialiser silently
+    // mis-assigns every field after an inserted member (this exact bug made
+    // nativePtr land in the wrong slot when a telemetry flag was added).
+    OptimizedTrigger trig{};
+    trig.id = id;
+    trig.groupID = groupID;
+    trig.type = type;
+    trig.triggerX = triggerX;
+    trig.bounds = effectiveBounds.normalized();
+    trig.spawnOrder = spawnOrder;
+    trig.isMultiTriggered = isMultiTriggered;
+    trig.enabled = true;
+    trig.activated = false;
+    trig.isCompleted = false;
+    trig.reportedInLookahead = false;
+    trig.nativePtr = nativePtr;
+    m_triggers.push_back(trig);
 }
 
 bool TriggerOptimizer::compareTriggersDeterministic(const OptimizedTrigger* a, const OptimizedTrigger* b) {
@@ -84,6 +89,7 @@ void TriggerOptimizer::prepareLevel() {
     for (auto& trig : m_triggers) {
         trig.activated = false;
         trig.isCompleted = false;
+        trig.reportedInLookahead = false;
         trig.enabled = true;
 
         if (trig.type == TriggerType::TouchOrPosition || trig.type == TriggerType::TouchOnly) {
@@ -127,6 +133,7 @@ void TriggerOptimizer::rewindCursorTo(float xPosition) {
         if (trig->isMultiTriggered && trig->triggerX > xPosition) {
             trig->activated = false;
             trig->isCompleted = false;
+            trig->reportedInLookahead = false;
         }
     }
 }
@@ -239,8 +246,8 @@ size_t TriggerOptimizer::inspectLookaheadWindow(float playerX) {
         }
         if (trig->enabled) {
             m_lastEvaluatedCount++;
-            if (playerX >= trig->triggerX && !trig->activated) {
-                trig->activated = true;
+            if (playerX >= trig->triggerX && !trig->reportedInLookahead) {
+                trig->reportedInLookahead = true;
                 m_lastExecutedCount++;
             }
         }

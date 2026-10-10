@@ -28,6 +28,11 @@ struct OptimizedTrigger {
     bool activated{false};
     bool isCompleted{false};
     void* nativePtr{nullptr};
+    // Bookkeeping for inspectLookaheadWindow(). Kept separate from `activated`
+    // so telemetry never perturbs the execution state used by evaluate() and
+    // evaluateWithHitbox(). Declared last so that adding it cannot shift any
+    // positional aggregate initialiser.
+    bool reportedInLookahead{false};
 };
 
 class TriggerOptimizer {
@@ -53,7 +58,11 @@ public:
     size_t evaluateWithHitbox(float playerX, const core::Rect2D& playerHitbox,
                               std::vector<void*>& outTriggersToExecute);
 
-    // Non-destructive lookahead window inspection for safe gameplay telemetry
+    // Lookahead window inspection for safe gameplay telemetry.
+    //
+    // Advances the internal scan cursor (that is what keeps the scan
+    // amortised O(1)) but never mutates `activated` / `isCompleted`, so it
+    // cannot change what evaluate() or evaluateWithHitbox() would execute.
     size_t inspectLookaheadWindow(float playerX);
 
     // Instant O(1) group spawn invocation

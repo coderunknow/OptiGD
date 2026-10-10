@@ -35,6 +35,16 @@ public:
     void setExternalFrameDeltaUs(double frameDeltaUs) { m_externalFrameDeltaUs = frameDeltaUs; }
     void recordHeapAllocationAvoided(uint32_t count = 1) { m_frameHeapAllocationsAvoided += count; }
     void recordSubsystemOverheadUs(double overheadUs) { m_frameOptigdOverheadUs += overheadUs; }
+
+    // Per-subsystem CPU accounting. These feed FrameStats::*TimeUs, which in
+    // turn drive the Profiler subsystem metrics and FallbackManager's
+    // per-feature CPU safety budgets. Without them those two consumers were
+    // permanently dead (every budget check compared 0 against its threshold).
+    void recordCullingTimeUs(double us) { m_currentStats.cullingTimeUs += us; recordSubsystemOverheadUs(us); }
+    void recordParticleTimeUs(double us) { m_currentStats.particleTimeUs += us; recordSubsystemOverheadUs(us); }
+    void recordTriggerTimeUs(double us) { m_currentStats.triggerTimeUs += us; recordSubsystemOverheadUs(us); }
+    void recordMatrixTimeUs(double us) { m_currentStats.matrixTimeUs += us; recordSubsystemOverheadUs(us); }
+
     void endFrame();
 
     // Subsystem accessors

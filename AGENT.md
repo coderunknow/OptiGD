@@ -2,9 +2,10 @@
 
 ## 1. Project Identity & Target Metadata
 - **Project**: OptiGD (`coderunknow.optigd`)
-- **Current Target Version**: `v0.1.0-beta1`
-  - `mod.json`: `"version": "v0.1.0-beta1"`, `"geode": "5.10.1"`
-  - `CMakeLists.txt`: `project(OptiGD VERSION 0.1.0 LANGUAGES CXX)` (CMake `project(... VERSION ...)` requires numeric `MAJOR.MINOR.PATCH`; full prerelease tag `0.1.0-beta1` is defined in `src/core/Types.hpp` and `mod.json`).
+- **Current Target Version**: `v0.1.0-beta.2`
+  - `mod.json`: `"version": "v0.1.0-beta.2"`, `"geode": "5.10.1"`
+  - `CMakeLists.txt`: `project(OptiGD VERSION 0.1.0 LANGUAGES CXX)` (CMake `project(... VERSION ...)` requires numeric `MAJOR.MINOR.PATCH`; full prerelease tag `0.1.0-beta.2` is defined in `src/core/Types.hpp` and `mod.json`).
+  - The prerelease form is load-bearing: Geode `5.10.1`'s `VersionInfo::parse` **rejects** `v0.1.0-beta2` (`Expected end of version, found '2'`) and only accepts `v0.1.0-beta.2`. `src/core/GeodeVersion.cpp` ports that grammar, `tools/validate_geode_metadata.py` gatekeeps it in CI, and `tests/UnitTests.cpp::testGeodeVersionMetadataGrammar` locks it down.
 - **Target Game Version**: Geometry Dash `2.2081`
 - **Required Build Targets**:
   - Windows x64 (`Win64` -> `coderunknow.optigd.dll`)

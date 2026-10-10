@@ -9,6 +9,41 @@
 
 namespace optigd::diagnostics {
 
+namespace {
+
+// Escapes a string so it can be embedded in a JSON string literal. Without this
+// any value containing a quote, backslash or control character (for example a
+// fallback reason or a platform/compiler name) would produce an unparseable
+// report.
+std::string jsonEscape(std::string_view input) {
+    std::string out;
+    out.reserve(input.size() + 8);
+    for (char c : input) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    static const char* kHex = "0123456789abcdef";
+                    out += "\\u00";
+                    out += kHex[(static_cast<unsigned char>(c) >> 4) & 0xF];
+                    out += kHex[static_cast<unsigned char>(c) & 0xF];
+                } else {
+                    out += c;
+                }
+                break;
+        }
+    }
+    return out;
+}
+
+} // namespace
+
 DiagnosticsEngine& DiagnosticsEngine::instance() {
     static DiagnosticsEngine s_instance;
     return s_instance;
@@ -122,17 +157,17 @@ std::string DiagnosticsEngine::generateJsonReport(
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(3);
     ss << "{\n";
-    ss << "  \"optigd_version\": \"" << core::kOptiGDVersion << "\",\n";
-    ss << "  \"gd_version\": \"" << compat.getGDVersion() << "\",\n";
-    ss << "  \"geode_version\": \"" << compat.getGeodeVersion() << "\",\n";
+    ss << "  \"optigd_version\": \"" << jsonEscape(core::kOptiGDVersion) << "\",\n";
+    ss << "  \"gd_version\": \"" << jsonEscape(compat.getGDVersion()) << "\",\n";
+    ss << "  \"geode_version\": \"" << jsonEscape(compat.getGeodeVersion()) << "\",\n";
     ss << "  \"platform\": {\n";
-    ss << "    \"os\": \"" << hw.osName << "\",\n";
-    ss << "    \"compiler\": \"" << hw.compiler << "\",\n";
+    ss << "    \"os\": \"" << jsonEscape(hw.osName) << "\",\n";
+    ss << "    \"compiler\": \"" << jsonEscape(hw.compiler) << "\",\n";
     ss << "    \"cores\": " << hw.logicalCores << ",\n";
     ss << "    \"total_ram_mb\": " << hw.totalRamMb << "\n";
     ss << "  },\n";
     ss << "  \"configuration\": {\n";
-    ss << "    \"active_tier\": \"" << sum.activeTier << "\",\n";
+    ss << "    \"active_tier\": \"" << jsonEscape(sum.activeTier) << "\",\n";
     ss << "    \"target_fps\": " << config.targetFrameRate << ",\n";
     ss << "    \"particle_density_scale\": " << config.particleDensityScale << ",\n";
     ss << "    \"max_active_particles\": " << config.maxActiveParticles << ",\n";
@@ -164,14 +199,20 @@ std::string DiagnosticsEngine::generateJsonReport(
     ss << "    \"total_heap_allocations_avoided\": " << sum.totalHeapAllocationsAvoided << ",\n";
     ss << "    \"tier_transitions_count\": " << sum.tierTransitionsCount << "\n";
     ss << "  },\n";
+    ss << "  \"notes\": {\n";
+    ss << "    \"native_trigger_execution_modified\": false,\n";
+    ss << "    \"total_triggers_skipped_meaning\": "
+       << "\"Triggers outside the TriggerOptimizer lookahead window (telemetry only); "
+       << "native Geometry Dash trigger execution is never gated or replaced.\"\n";
+    ss << "  },\n";
     ss << "  \"fallbacks\": [\n";
     for (size_t i = 0; i < fallbacks.size(); ++i) {
         const auto& fb = fallbacks[i];
         ss << "    {\n";
         ss << "      \"frame\": " << fb.frameIndex << ",\n";
-        ss << "      \"feature\": \"" << fb.feature << "\",\n";
-        ss << "      \"reason\": \"" << fb.reason << "\",\n";
-        ss << "      \"action\": \"" << fb.actionTaken << "\"\n";
+        ss << "      \"feature\": \"" << jsonEscape(fb.feature) << "\",\n";
+        ss << "      \"reason\": \"" << jsonEscape(fb.reason) << "\",\n";
+        ss << "      \"action\": \"" << jsonEscape(fb.actionTaken) << "\"\n";
         ss << "    }" << (i + 1 < fallbacks.size() ? "," : "") << "\n";
     }
     ss << "  ]\n";

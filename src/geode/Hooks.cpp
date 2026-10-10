@@ -187,6 +187,10 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
         auto& mgr = optigd::core::OptiGDManager::instance();
         const auto& cfg = mgr.getActiveConfig();
 
+        if (!cfg.flags.enableMatrixCaching && !cfg.flags.enableSpatialCulling) return;
+
+        auto matrixStart = std::chrono::steady_clock::now();
+
         if (cfg.flags.enableMatrixCaching) {
             optigd::optimization::MatrixCache::instance().markDirty(object);
         }
@@ -195,6 +199,10 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
                 object, cfg.flags.enableMatrixCaching);
             mgr.getVisibilityCuller().updateObjectBoundsByPtr(object, bounds);
         }
+
+        auto matrixEnd = std::chrono::steady_clock::now();
+        mgr.recordMatrixTimeUs(
+            std::chrono::duration<double, std::micro>(matrixEnd - matrixStart).count());
     }
 
     void removeObjectFromSection(GameObject* object) {
@@ -234,8 +242,13 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
         uint32_t registeredObjectSeq{0};
         uint32_t registeredTriggerSeq{0};
         uint32_t frameTick{0};
+        // True while OptiGD's differential culling owns the visibility state of
+        // decorative objects. Used to restore them when the feature is turned
+        // off (or becomes unusable) mid-level instead of leaving them hidden.
+        bool cullingEngaged{false};
         std::vector<void*> newlyVisibleBuffer;
         std::vector<void*> newlyCulledBuffer;
+        std::vector<void*> restoreBuffer;
     };
 
     bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
@@ -245,6 +258,7 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
         m_fields->registeredObjectSeq = 0;
         m_fields->registeredTriggerSeq = 0;
         m_fields->frameTick = 0;
+        m_fields->cullingEngaged = false;
         m_fields->newlyVisibleBuffer.reserve(512);
         m_fields->newlyCulledBuffer.reserve(512);
 
@@ -340,8 +354,25 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
 
         if (!cfg.flags.enableSpatialCulling ||
             !optigd::compat::CompatibilityLayer::instance().isFeatureUsable("spatial_culling")) {
+            // Feature was just switched off: reveal everything OptiGD hid so the
+            // level returns to its native (vanilla) visibility state.
+            if (m_fields->cullingEngaged) {
+                m_fields->cullingEngaged = false;
+                m_fields->restoreBuffer.clear();
+                mgr.getVisibilityCuller().restoreAllVisibility(&m_fields->restoreBuffer,
+                                                               /*decorativeOnly=*/true);
+                for (void* ptr : m_fields->restoreBuffer) {
+                    auto* obj = static_cast<GameObject*>(ptr);
+                    if (!obj || obj->m_isTrigger) continue;
+                    if (!obj->m_isHide && !obj->m_isInvisible &&
+                        !obj->m_isDisabled && !obj->m_isDisabled2) {
+                        obj->setVisible(true);
+                    }
+                }
+            }
             return;
         }
+        m_fields->cullingEngaged = true;
 
         auto startTime = std::chrono::steady_clock::now();
         auto cameraRect = optigd::geode_integration::computeCameraWorldRect(this);
@@ -380,7 +411,7 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
 
         auto endTime = std::chrono::steady_clock::now();
         double cullUs = std::chrono::duration<double, std::micro>(endTime - startTime).count();
-        mgr.recordSubsystemOverheadUs(cullUs);
+        mgr.recordCullingTimeUs(cullUs);
     }
 
     void postUpdate(float dt) {
@@ -395,7 +426,7 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
             auto t0 = std::chrono::steady_clock::now();
             mgr.getTriggerOptimizer().inspectLookaheadWindow(this->m_player1->getPositionX());
             auto t1 = std::chrono::steady_clock::now();
-            mgr.recordSubsystemOverheadUs(
+            mgr.recordTriggerTimeUs(
                 std::chrono::duration<double, std::micro>(t1 - t0).count());
         }
 
@@ -416,6 +447,7 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
 
     void resetLevel() {
         PlayLayer::resetLevel();
+        m_fields->cullingEngaged = false;
         optigd::core::OptiGDManager::instance().onLevelReset();
     }
 
@@ -503,7 +535,7 @@ class $modify(OptiGDParticleSystem, cocos2d::CCParticleSystem) {
                 this->m_fEmitCounter = 0.0f;
             }
             auto endTime = std::chrono::steady_clock::now();
-            mgr.recordSubsystemOverheadUs(
+            mgr.recordParticleTimeUs(
                 std::chrono::duration<double, std::micro>(endTime - startTime).count());
             return;
         }
@@ -518,7 +550,7 @@ class $modify(OptiGDParticleSystem, cocos2d::CCParticleSystem) {
         gov.recordActiveParticles(m_fields->emitterId, this->m_uParticleCount);
 
         auto endTime = std::chrono::steady_clock::now();
-        mgr.recordSubsystemOverheadUs(
+        mgr.recordParticleTimeUs(
             std::chrono::duration<double, std::micro>(endTime - startTime).count());
     }
 };

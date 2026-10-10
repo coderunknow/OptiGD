@@ -151,7 +151,9 @@ bool MatrixCache::getCached(void* nodePtr, float px, float py, float rot, float 
     }
 
     const auto& item = it->second;
-    if (item.dirty) {
+    // An entry created implicitly by setParent() holds a default identity
+    // matrix that was never derived from real node parameters.
+    if (item.dirty || !item.computed) {
         m_misses++;
         return false;
     }
@@ -177,14 +179,19 @@ bool MatrixCache::getCached(void* nodePtr, float px, float py, float rot, float 
     return false;
 }
 
-void MatrixCache::store(void* nodePtr, float px, float py, float rot, float sx, float sy, const AffineMatrix& matrix) {
+void MatrixCache::store(void* nodePtr, float px, float py, float rot, float sx, float sy,
+                        const AffineMatrix& matrix, float anchorX, float anchorY) {
     if (!nodePtr) return;
 
     auto& ct = m_cache[nodePtr];
-    bool changed = ct.dirty ||
+    // The anchor is part of the getOrCompute() cache key, so it must be part of
+    // the change detection here too - otherwise a store() would leave a stale
+    // anchor behind and getOrCompute() would compute an incorrect hit/miss.
+    bool changed = ct.dirty || !ct.computed ||
                    ct.lastPosX != px || ct.lastPosY != py ||
                    ct.lastRot != rot ||
-                   ct.lastScaleX != sx || ct.lastScaleY != sy;
+                   ct.lastScaleX != sx || ct.lastScaleY != sy ||
+                   ct.lastAnchorX != anchorX || ct.lastAnchorY != anchorY;
 
     ct.matrix = matrix;
     ct.lastPosX = px;
@@ -192,11 +199,48 @@ void MatrixCache::store(void* nodePtr, float px, float py, float rot, float sx, 
     ct.lastRot = rot;
     ct.lastScaleX = sx;
     ct.lastScaleY = sy;
+    ct.lastAnchorX = anchorX;
+    ct.lastAnchorY = anchorY;
+    ct.computed = true;
     ct.dirty = false;
 
     if (changed) {
         markChildrenDirtyRecursive(nodePtr, 0);
     }
+}
+
+size_t MatrixCache::pruneStaleEntries() {
+    size_t pruned = 0;
+    bool removedAny = true;
+
+    // Repeat until a full pass removes nothing: dropping a phantom leaf can
+    // turn its parent into a childless phantom that is then removable too.
+    while (removedAny) {
+        removedAny = false;
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            CachedTransform& ct = it->second;
+            if (ct.computed || !ct.children.empty()) {
+                ++it;
+                continue;
+            }
+
+            // Detach from the parent first: erasing the entry without doing so
+            // would leave the parent holding a dangling child pointer.
+            if (ct.parentPtr != nullptr) {
+                auto parentIt = m_cache.find(ct.parentPtr);
+                if (parentIt != m_cache.end()) {
+                    auto& siblings = parentIt->second.children;
+                    siblings.erase(std::remove(siblings.begin(), siblings.end(), it->first),
+                                   siblings.end());
+                }
+            }
+
+            it = m_cache.erase(it);
+            ++pruned;
+            removedAny = true;
+        }
+    }
+    return pruned;
 }
 
 AffineMatrix MatrixCache::getOrCompute(void* nodePtr, float px, float py, float rot,
@@ -218,17 +262,7 @@ AffineMatrix MatrixCache::getOrCompute(void* nodePtr, float px, float py, float 
     m_misses++;
     mat = AffineMatrix::fromNodeParams(px, py, rot, sx, sy, anchorX, anchorY);
     if (nodePtr != nullptr) {
-        auto& ct = m_cache[nodePtr];
-        ct.matrix = mat;
-        ct.lastPosX = px;
-        ct.lastPosY = py;
-        ct.lastRot = rot;
-        ct.lastScaleX = sx;
-        ct.lastScaleY = sy;
-        ct.lastAnchorX = anchorX;
-        ct.lastAnchorY = anchorY;
-        ct.dirty = false;
-        markChildrenDirtyRecursive(nodePtr, 0);
+        store(nodePtr, px, py, rot, sx, sy, mat, anchorX, anchorY);
     }
     return mat;
 }

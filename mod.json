@@ -6,7 +6,7 @@
     },
     "id": "coderunknow.optigd",
     "name": "OptiGD",
-    "version": "v0.1.0-beta1",
+    "version": "v0.1.0-beta.2",
     "developer": "coderunknow",
     "description": "Production-grade performance optimization engine for Geometry Dash (Spatial Culling, Particle Governor, Adaptive Frame Pacing, Memory Arena).",
     "repository": "https://github.com/coderunknow/OptiGD",

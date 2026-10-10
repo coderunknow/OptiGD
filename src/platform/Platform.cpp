@@ -14,7 +14,9 @@
     #endif
     #include <windows.h>
     #include <psapi.h>
-    #pragma comment(lib, "psapi.lib")
+    #ifdef _MSC_VER
+        #pragma comment(lib, "psapi.lib")
+    #endif
 #elif defined(__ANDROID__)
     #define OPTIGD_OS_ANDROID 1
     #include <unistd.h>

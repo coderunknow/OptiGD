@@ -1,4 +1,5 @@
 #include "../src/core/Types.hpp"
+#include "../src/core/GeodeVersion.hpp"
 #include "../src/core/Logger.hpp"
 #include "../src/core/MemoryArena.hpp"
 #include "../src/core/SpatialHash.hpp"
@@ -18,9 +19,11 @@
 #include "../src/benchmark/BenchmarkSuite.hpp"
 
 #include <iostream>
+#include <fstream>
 #include <cmath>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
 
@@ -378,15 +381,13 @@ void testAdaptiveGovernorAndFallback() {
     OPTIGD_ASSERT(triggered && fb.isFallbackActive(), "High frame-time jitter should trigger safety fallback");
     OPTIGD_ASSERT(cfg.particleDensityScale == 0.25f, "Fallback should reduce particle density scale to 0.25");
 
-    // Tick down cooldown (2 frames) then feed stable frames for recovery
+    // Recovery is now evaluated every frame regardless of the cooldown, so the
+    // two required stable evaluations happen immediately (frames 101 and 102).
     optigd::adaptive::WindowStats stableStats{};
     stableStats.stdDevMs = 0.4;
     stableStats.fps = 60.0;
     fb.checkAndApplyFallbacks(101, stableStats, cfg);
     fb.checkAndApplyFallbacks(102, stableStats, cfg);
-    // Now cooldown is 0; 2 stable evaluations should recover pre-fallback config
-    fb.checkAndApplyFallbacks(103, stableStats, cfg);
-    fb.checkAndApplyFallbacks(104, stableStats, cfg);
 
     OPTIGD_ASSERT(!fb.isFallbackActive() && fb.getRecoveryCount() == 1,
                   "FallbackManager should recover once frame-time variance stabilizes");
@@ -462,8 +463,8 @@ void testManagerAndCompatibility() {
     mgr.shutdown();
     mgr.initialize();
 
-    OPTIGD_ASSERT(std::string(optigd::core::kOptiGDVersion) == "0.1.0-beta1",
-                  "OptiGD version constant must be 0.1.0-beta1");
+    OPTIGD_ASSERT(std::string(optigd::core::kOptiGDVersion) == "0.1.0-beta.2",
+                  "OptiGD version constant must be 0.1.0-beta.2");
     OPTIGD_ASSERT(compat.getGDVersion() == "2.2081", "Default GD target version must be 2.2081");
     OPTIGD_ASSERT(compat.getGeodeVersion() == "v5.10.1", "Default Geode target version must be v5.10.1");
     OPTIGD_ASSERT(compat.isEnvironmentCompatible(), "Environment must be compatible");
@@ -500,8 +501,8 @@ void testManagerAndCompatibility() {
         mgr.getFallbackManager().getFallbackHistory(),
         mgr.getAdaptiveGovernor().getTierTransitions()
     );
-    OPTIGD_ASSERT(report.find("\"optigd_version\": \"0.1.0-beta1\"") != std::string::npos,
-                  "JSON report must contain optigd_version 0.1.0-beta1");
+    OPTIGD_ASSERT(report.find("\"optigd_version\": \"0.1.0-beta.2\"") != std::string::npos,
+                  "JSON report must contain optigd_version 0.1.0-beta.2");
     OPTIGD_ASSERT(report.find("\"geode_version\": \"v5.10.1\"") != std::string::npos,
                   "JSON report must contain geode_version v5.10.1");
     OPTIGD_ASSERT(report.find("\"median_frame_time_ms\"") != std::string::npos,
@@ -510,8 +511,8 @@ void testManagerAndCompatibility() {
     optigd::ui::DiagnosticsOverlay::instance().setEnabled(true);
     std::string hud = optigd::ui::DiagnosticsOverlay::instance().formatOverlayText(
         latest, mgr.getAdaptiveGovernor().getRecentStats(), mgr.getActiveConfig());
-    OPTIGD_ASSERT(hud.find("[OptiGD v0.1.0-beta1 Diagnostics]") != std::string::npos,
-                  "Overlay header must display v0.1.0-beta1");
+    OPTIGD_ASSERT(hud.find("[OptiGD v0.1.0-beta.2 Diagnostics]") != std::string::npos,
+                  "Overlay header must display v0.1.0-beta.2");
 
     // Verify Profiler & Logger callback integration
     {
@@ -536,9 +537,592 @@ void testManagerAndCompatibility() {
     OPTIGD_PASS();
 }
 
+
+// 10. Regression: Geode 5.10.1 `mod.json` version grammar (root cause of the
+//     reported "unexpected type string" loading failure).
+//     Geode reads `mod.json`'s "version" and "geode" fields into a
+//     `geode::VersionInfo` (not a std::string). When matjson's conversion
+//     fails, `JsonExpectedValue::tryGet<T>()` replaces the detailed error with
+//     the *JSON* type, so an invalid version string surfaces to users as
+//     "unexpected type string" and the mod is rejected with
+//     LoadProblem::Type::InvalidGeodeFile.
+void testGeodeVersionMetadataGrammar() {
+    using optigd::core::geodever::parseVersionString;
+    using optigd::core::geodever::isValidGeodeVersionString;
+
+    // The exact string shipped in v0.1.0-beta1, which Geode 5.10.1 rejects.
+    auto beta1 = parseVersionString("v0.1.0-beta1");
+    OPTIGD_ASSERT(!beta1.valid, "v0.1.0-beta1 must be rejected by the Geode grammar");
+    OPTIGD_ASSERT(beta1.error == "Expected end of version, found '1'",
+                  "Geode 5.10.1 rejects trailing tag digits without a dot");
+
+    // The literal `v0.1.0-beta2` form is rejected for the same reason.
+    OPTIGD_ASSERT(!isValidGeodeVersionString("v0.1.0-beta2"),
+                  "v0.1.0-beta2 must also be rejected (tag number requires a dot)");
+
+    // The form actually used by this build must parse.
+    auto current = parseVersionString(optigd::core::kOptiGDVersionTag);
+    OPTIGD_ASSERT(current.valid,
+                  "kOptiGDVersionTag must satisfy the Geode VersionInfo grammar");
+    OPTIGD_ASSERT(current.major == 0 && current.minor == 1 && current.patch == 0,
+                  "Parsed version must be 0.1.0");
+    OPTIGD_ASSERT(current.tag.has_value() &&
+                      *current.tag == optigd::core::geodever::VersionTagKind::Beta,
+                  "Parsed tag must be Beta");
+    OPTIGD_ASSERT(current.tagNumber.has_value() && *current.tagNumber == 2,
+                  "Parsed tag number must be 2");
+    OPTIGD_ASSERT(current.toVString() == std::string(optigd::core::kOptiGDVersionTag),
+                  "Round-trip formatting must be stable");
+
+    // The un-prefixed constant must also be valid (Geode allows a leading 'v').
+    OPTIGD_ASSERT(isValidGeodeVersionString(optigd::core::kOptiGDVersion),
+                  "kOptiGDVersion must also parse");
+
+    // The pinned SDK version and other accepted forms.
+    OPTIGD_ASSERT(isValidGeodeVersionString("5.10.1"), "Plain semver must parse");
+    OPTIGD_ASSERT(isValidGeodeVersionString("v5.10.1"), "Leading v must be optional");
+    OPTIGD_ASSERT(isValidGeodeVersionString("v0.1.0"), "No-tag versions must parse");
+    OPTIGD_ASSERT(isValidGeodeVersionString("v0.1.0-beta"), "Unnumbered beta must parse");
+    OPTIGD_ASSERT(isValidGeodeVersionString("v1.2.3-alpha.4"), "alpha.N must parse");
+    OPTIGD_ASSERT(isValidGeodeVersionString("v1.2.3-prerelease.7"), "prerelease.N must parse");
+
+    // Rejected forms.
+    OPTIGD_ASSERT(!isValidGeodeVersionString("2.2081"), "Patch version is mandatory");
+    OPTIGD_ASSERT(!isValidGeodeVersionString("v0.1.0-gamma.2"), "Unknown tags are rejected");
+    OPTIGD_ASSERT(!isValidGeodeVersionString("v0.1.0-beta.2.3"), "Trailing input is rejected");
+    OPTIGD_ASSERT(!isValidGeodeVersionString(""), "Empty string is rejected");
+
+    OPTIGD_PASS();
+}
+
+// 11. Regression: changing the spatial cell size must re-index objects instead
+//     of silently emptying the SpatialHash (which previously made every object
+//     look culled and hid the entire level's decorations permanently).
+void testVisibilityCullerCellSizeReindex() {
+    optigd::optimization::VisibilityCuller culler(128.0f);
+    culler.setPadding(0.0f, 0.0f);
+
+    std::vector<int> nodes(64);
+    for (int i = 0; i < 64; ++i) {
+        nodes[i] = i;
+        culler.registerObject(static_cast<uint32_t>(i),
+                              optigd::core::Rect2D(i * 50.0f, 0.0f, 40.0f, 40.0f),
+                              &nodes[i], true, true);
+    }
+
+    optigd::core::MemoryArena arena(65536);
+    auto before = culler.evaluateVisibilityDelta(
+        optigd::core::Rect2D(0.0f, -100.0f, 400.0f, 400.0f), arena, nullptr, nullptr);
+    OPTIGD_ASSERT(before.visibleCount > 0, "Camera should see several objects before resize");
+
+    // Simulate OptiGDManager::applyConfigToSubsystems() running mid-level.
+    culler.setCellSize(256.0f);
+    OPTIGD_ASSERT(std::abs(culler.getCellSize() - 256.0f) < 0.001f, "Cell size must change");
+
+    arena.reset();
+    auto after = culler.evaluateVisibilityDelta(
+        optigd::core::Rect2D(0.0f, -100.0f, 400.0f, 400.0f), arena, nullptr, nullptr);
+    OPTIGD_ASSERT(after.visibleCount == before.visibleCount,
+                  "Re-indexing after a cell-size change must preserve the visible set");
+
+    // A no-op resize must not disturb anything either.
+    culler.setCellSize(256.0f);
+    arena.reset();
+    auto same = culler.evaluateVisibilityDelta(
+        optigd::core::Rect2D(0.0f, -100.0f, 400.0f, 400.0f), arena, nullptr, nullptr);
+    OPTIGD_ASSERT(same.visibleCount == after.visibleCount,
+                  "Re-applying the same cell size must be a no-op");
+
+    // Disabling culling must reveal every object OptiGD hid.
+    arena.reset();
+    culler.evaluateVisibilityDelta(
+        optigd::core::Rect2D(100000.0f, 0.0f, 400.0f, 400.0f), arena, nullptr, nullptr);
+    OPTIGD_ASSERT(culler.hasCulledObjects(), "Moving the camera away must cull objects");
+
+    std::vector<void*> restored;
+    size_t restoredCount = culler.restoreAllVisibility(&restored, /*decorativeOnly=*/true);
+    OPTIGD_ASSERT(restoredCount == 64 && restored.size() == 64,
+                  "restoreAllVisibility must reveal every culled decorative object");
+    OPTIGD_ASSERT(!culler.hasCulledObjects(), "No object may remain culled after restore");
+
+    OPTIGD_PASS();
+}
+
+// 12. Regression: ParticleGovernor totals must be maintained incrementally.
+//     The previous implementation rescanned every emitter inside
+//     recordActiveParticles(), i.e. once per emitter per frame (O(N^2)).
+void testParticleGovernorIncrementalTotals() {
+    optigd::optimization::ParticleGovernor gov(1.0f, 100000);
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        gov.registerEmitter(i, {0.0f, 0.0f}, 64.0f,
+                            optigd::optimization::ParticlePriority::Cosmetic,
+                            nullptr, 30.0f, -1.0f, false);
+    }
+
+    OPTIGD_ASSERT(gov.getTotalActiveParticles() == 0, "Initial total must be zero");
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        gov.recordActiveParticles(i, 100);
+    }
+    OPTIGD_ASSERT(gov.getTotalActiveParticles() == 1000,
+                  "Running total must accumulate (10 emitters x 100 particles)");
+
+    // Shrinking one emitter must subtract only the delta.
+    gov.recordActiveParticles(3, 40);
+    OPTIGD_ASSERT(gov.getTotalActiveParticles() == 940,
+                  "Shrinking an emitter must subtract only its delta");
+
+    // Unregistering an emitter must remove its contribution entirely.
+    OPTIGD_ASSERT(gov.unregisterEmitter(0), "unregisterEmitter must succeed");
+    OPTIGD_ASSERT(gov.getTotalActiveParticles() == 840,
+                  "Unregistering must remove that emitter's particle count");
+
+    OPTIGD_PASS();
+}
+
+// 13. Regression: DiagnosticsEngine JSON output must stay parseable even when
+//     fallback reasons contain characters that require escaping.
+void testDiagnosticsJsonEscaping() {
+    optigd::diagnostics::DiagnosticsEngine& diag =
+        optigd::diagnostics::DiagnosticsEngine::instance();
+    diag.reset();
+
+    optigd::core::FrameStats stats{};
+    stats.totalFrameTimeUs = 16666.0;
+    stats.updateCpuTimeUs = 4200.0;
+    stats.optigdOverheadUs = 12.5;
+    diag.recordFrameStats(stats);
+
+    std::vector<optigd::adaptive::FallbackEvent> fallbacks;
+    fallbacks.push_back({7, "matrix\"cache", "reason with \"quotes\" and \\backslash\\",
+                         "action\twith\ttabs"});
+
+    std::string report = diag.generateJsonReport(optigd::core::OptiConfig{}, fallbacks, 3);
+
+    // A raw, unescaped quote inside a JSON string would terminate it early and
+    // break every consumer (jq, tools/generate_report.py).
+    OPTIGD_ASSERT(report.find("matrix\\\"cache") != std::string::npos,
+                  "Quotes in JSON string values must be escaped");
+    OPTIGD_ASSERT(report.find("\\\"quotes\\\"") != std::string::npos,
+                  "Inner quotes must be escaped");
+    OPTIGD_ASSERT(report.find("\\\\backslash\\\\") != std::string::npos,
+                  "Backslashes must be escaped");
+    OPTIGD_ASSERT(report.find("action\\twith\\ttabs") != std::string::npos,
+                  "Control characters must be escaped");
+    OPTIGD_ASSERT(report.find("\"notes\"") != std::string::npos,
+                  "Report must document that native trigger execution is unmodified");
+    OPTIGD_ASSERT(report.find("\"native_trigger_execution_modified\": false") != std::string::npos,
+                  "Report must state native trigger execution is untouched");
+
+    diag.reset();
+    OPTIGD_PASS();
+}
+
+// 14. Regression: persisted OptiGD configuration may be truncated or written by
+//     an older build; loading it must never throw or corrupt the config.
+void testConfigDeserializeRobustness() {
+    auto& cfgMgr = optigd::config::ConfigManager::instance();
+    cfgMgr.resetToDefaults();
+
+    std::string malformed =
+        "tier=not-a-number\n"
+        "targetFps=oops\n"
+        "spatialCulling=1\n"
+        "particleDensityScale=NaN-ish\n"
+        "maxActiveParticles=99999999999999999999\n"
+        "cameraPaddingX=12.5\n"
+        "cameraPaddingY=\n"
+        "garbage-line-without-equals\n"
+        "exportDiagnosticsOnExit=0\n";
+
+    bool ok = cfgMgr.deserialize(malformed);
+    OPTIGD_ASSERT(ok, "deserialize must report partial success rather than throwing");
+    OPTIGD_ASSERT(cfgMgr.getConfig().flags.enableSpatialCulling,
+                  "Valid boolean lines must still be applied");
+    OPTIGD_ASSERT(std::abs(cfgMgr.getConfig().cameraPaddingX - 12.5f) < 0.001f,
+                  "Valid float lines must still be applied");
+    OPTIGD_ASSERT(!cfgMgr.getConfig().flags.exportDiagnosticsOnExit,
+                  "Valid feature flags must still be applied");
+    OPTIGD_ASSERT(cfgMgr.getConfig().tier == optigd::core::PerformanceTier::LowEnd,
+                  "Malformed tier lines must leave the default tier intact");
+    OPTIGD_ASSERT(std::abs(cfgMgr.getConfig().targetFrameRate - 60.0f) < 0.001f,
+                  "Malformed FPS lines must leave the default frame rate intact");
+
+    OPTIGD_ASSERT(!cfgMgr.deserialize(""), "Empty data must not be reported as loaded");
+
+    cfgMgr.resetToDefaults();
+    OPTIGD_PASS();
+}
+
+// 15. Regression: the camera world rect convention used by
+//     computeCameraWorldRect() in src/geode/Hooks.cpp.
+//     GJBaseGameLayer::m_gameState.m_cameraPosition is the BOTTOM-LEFT corner of
+//     the visible area in object-layer units, not its centre. Evidence from the
+//     pinned GD 2.2081 bindings:
+//       * inline/PlayLayer.cpp screenFlipObject():
+//             xDiff = objectPos.x - m_gameState.m_cameraPosition.x
+//             newX  = objectPos.x + (winSize.width / zoom - 2 * xDiff) * factor
+//         which mirrors x about camX + (winSize.width / zoom) / 2, i.e. the view
+//         spans [camX, camX + winSize.width / zoom].
+//       * inline/GJBaseGameLayer.cpp lightningFlash():
+//             y = m_gameState.m_cameraPosition.y + (winSize.height + 50) / scale
+//         placing the flash above the TOP edge of the view.
+void testCameraWorldRectConvention() {
+    // Mirrors optigd::geode_integration::computeCameraWorldRect().
+    struct FakeCamera { float camX, camY, winW, winH, zoom; };
+    auto computeCameraWorldRect = [](FakeCamera const& c) {
+        float zoom = (c.zoom > 0.01f) ? c.zoom : 1.0f;
+        return optigd::core::Rect2D(c.camX, c.camY, c.winW / zoom, c.winH / zoom);
+    };
+
+    FakeCamera cam{1000.0f, 200.0f, 1280.0f, 720.0f, 1.0f};
+    auto rect = computeCameraWorldRect(cam);
+    OPTIGD_ASSERT(std::abs(rect.minX() - 1000.0f) < 0.001f,
+                  "Camera rect origin X is the camera position (bottom-left)");
+    OPTIGD_ASSERT(std::abs(rect.minY() - 200.0f) < 0.001f,
+                  "Camera rect origin Y is the camera position (bottom-left)");
+    OPTIGD_ASSERT(std::abs(rect.maxX() - 2280.0f) < 0.001f,
+                  "Camera rect width is winSize.width / zoom");
+    OPTIGD_ASSERT(std::abs(rect.maxY() - 920.0f) < 0.001f,
+                  "Camera rect height is winSize.height / zoom");
+
+    // Zoomed-out camera sees more world, never less.
+    FakeCamera zoomedOut{1000.0f, 200.0f, 1280.0f, 720.0f, 0.5f};
+    auto zoomRect = computeCameraWorldRect(zoomedOut);
+    OPTIGD_ASSERT(zoomRect.size.width > rect.size.width &&
+                      zoomRect.size.height > rect.size.height,
+                  "Zooming out must widen the visible world rect");
+
+    // A degenerate zoom must fall back to 1.0 instead of producing inf/NaN.
+    FakeCamera badZoom{0.0f, 0.0f, 1280.0f, 720.0f, 0.0f};
+    auto safeRect = computeCameraWorldRect(badZoom);
+    OPTIGD_ASSERT(std::isfinite(safeRect.size.width) && std::isfinite(safeRect.size.height),
+                  "Degenerate zoom must not produce a non-finite rect");
+
+    OPTIGD_PASS();
+}
+
+
+// 16. Regression: MatrixCache must never serve a matrix it did not compute.
+//     setParent() implicitly creates cache entries for nodes it has only seen
+//     as a link endpoint. Those entries used to be indistinguishable from
+//     computed ones, so a default-initialised identity matrix could satisfy a
+//     getCached() lookup, and the map grew without bound for linked-but-
+//     never-transformed node graphs.
+void testMatrixCacheStaleEntryPruning() {
+    auto& cache = optigd::optimization::MatrixCache::instance();
+    cache.clear();
+
+    int childNode = 1;
+    int parentNode = 2;
+
+    // Link two nodes that have never had a transform computed or stored.
+    cache.setParent(&childNode, &parentNode);
+    OPTIGD_ASSERT(cache.getCachedCount() == 2,
+                  "setParent registers both endpoints in the cache");
+
+    optigd::optimization::AffineMatrix out;
+    OPTIGD_ASSERT(!cache.getCached(&childNode, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, out),
+                  "An entry created only by setParent must never be a cache hit");
+    const uint64_t missesBefore = cache.getMisses();
+    cache.getCached(&parentNode, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, out);
+    OPTIGD_ASSERT(cache.getMisses() == missesBefore + 1,
+                  "Implicit parent entries must also miss");
+
+    // A real store() makes the entry usable.
+    optigd::optimization::AffineMatrix real =
+        optigd::optimization::AffineMatrix::fromNodeParams(10.0f, 20.0f, 0.0f, 1.0f, 1.0f);
+    cache.store(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, real);
+    OPTIGD_ASSERT(cache.getCached(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, out),
+                  "After store(), the entry must be a hit");
+    OPTIGD_ASSERT(out.approximatelyEquals(real), "Cached matrix must round-trip exactly");
+
+    // store() must treat the anchor as part of the cache key. getOrCompute()
+    // keys on the anchor, so a store() that ignored it could leave an entry
+    // whose recorded anchor no longer matches the matrix it holds.
+    optigd::optimization::AffineMatrix anchored =
+        optigd::optimization::AffineMatrix::fromNodeParams(10.0f, 20.0f, 0.0f, 1.0f, 1.0f, 0.5f, 0.5f);
+    cache.store(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, anchored, 0.5f, 0.5f);
+
+    uint64_t hitsBefore = cache.getHits();
+    optigd::optimization::AffineMatrix fromCache =
+        cache.getOrCompute(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, 0.5f, 0.5f);
+    OPTIGD_ASSERT(cache.getHits() == hitsBefore + 1,
+                  "store() must record the anchor, so a matching getOrCompute hits");
+    OPTIGD_ASSERT(fromCache.approximatelyEquals(anchored),
+                  "The anchor-aware cached matrix must round-trip exactly");
+
+    hitsBefore = cache.getHits();
+    cache.getOrCompute(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    OPTIGD_ASSERT(cache.getHits() == hitsBefore,
+                  "Changing only the anchor must invalidate the cached entry");
+
+    // A phantom chain (linked, never transformed) must be prunable, and
+    // pruning must detach children so no dangling pointers are left behind.
+    int phantomChild = 3;
+    int phantomParent = 4;
+    cache.setParent(&phantomChild, &phantomParent);
+    const size_t beforePrune = cache.getCachedCount();
+    OPTIGD_ASSERT(beforePrune == 4, "Two more phantom entries should be registered");
+
+    const size_t pruned = cache.pruneStaleEntries();
+    // phantomChild is a phantom leaf and goes first; detaching it makes
+    // phantomParent a childless phantom, so it goes too. parentNode keeps its
+    // one computed child and must survive.
+    OPTIGD_ASSERT(pruned == 2, "Both phantom entries must be pruned");
+    OPTIGD_ASSERT(cache.getCachedCount() == 2,
+                  "Only the never-computed phantom entries must be pruned");
+    OPTIGD_ASSERT(!cache.getCached(&phantomParent, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, out),
+                  "Pruned entries must fall back to a miss, not a default matrix");
+    OPTIGD_ASSERT(cache.getCached(&childNode, 10.0f, 20.0f, 0.0f, 1.0f, 1.0f, out),
+                  "Pruning must not disturb computed entries");
+
+    OPTIGD_PASS();
+}
+
+// 17. Regression: FallbackManager recovery must not be blocked by the
+//     fallback cooldown. Previously the cooldown early-returned before the
+//     recovery branch ran, so a stabilised workload could only restore its
+//     pre-fallback settings once the whole cooldown had elapsed.
+void testFallbackRecoveryDuringCooldown() {
+    optigd::core::OptiConfig cfg;
+    cfg.targetFrameRate = 60.0f;
+    cfg.particleDensityScale = 1.0f;
+
+    optigd::adaptive::FallbackManager fb(2.0f, 30);
+    fb.setRecoveryStableFrames(2);
+
+    optigd::adaptive::WindowStats jittery{};
+    jittery.stdDevMs = 8.5;
+    jittery.fps = 35.0;
+
+    OPTIGD_ASSERT(fb.checkAndApplyFallbacks(1, jittery, cfg),
+                  "Jitter beyond the threshold must apply a fallback");
+    OPTIGD_ASSERT(cfg.particleDensityScale == 0.25f,
+                  "Fallback must reduce particle density");
+    OPTIGD_ASSERT(fb.isFallbackActive(), "Fallback must be marked active");
+
+    // Recovery must be evaluated while the cooldown is still pending.
+    optigd::adaptive::WindowStats stable{};
+    stable.stdDevMs = 0.4;
+    stable.fps = 60.0;
+
+    for (int frame = 2; frame <= 3 && fb.isFallbackActive(); ++frame) {
+        fb.checkAndApplyFallbacks(frame, stable, cfg);
+    }
+
+    OPTIGD_ASSERT(!fb.isFallbackActive(),
+                  "Recovery must happen during the cooldown, not after it");
+    OPTIGD_ASSERT(fb.getRecoveryCount() == 1, "Exactly one recovery must be recorded");
+    OPTIGD_ASSERT(std::abs(cfg.particleDensityScale - 1.0f) < 0.001f,
+                  "Recovery must restore the pre-fallback density scale");
+
+    OPTIGD_PASS();
+}
+
+// 18. Regression: the per-frame profiler path must not take a mutex or
+//     materialise a std::string key. recordById() writes into a fixed array
+//     slot; the name based API resolves known metrics to the same slot.
+void testProfilerFastPath() {
+    auto& prof = optigd::profiling::Profiler::instance();
+    prof.reset();
+    prof.setEnabled(true);
+
+    prof.recordById(optigd::profiling::MetricId::VisibilityCuller, 10.0);
+    prof.recordById(optigd::profiling::MetricId::VisibilityCuller, 30.0);
+
+    auto byId = prof.getById(optigd::profiling::MetricId::VisibilityCuller);
+    OPTIGD_ASSERT(byId.callCount == 2, "recordById must accumulate call counts");
+    OPTIGD_ASSERT(std::abs(byId.totalTimeUs - 40.0) < 0.001, "recordById must accumulate time");
+    OPTIGD_ASSERT(std::abs(byId.minTimeUs - 10.0) < 0.001, "recordById must track the minimum");
+    OPTIGD_ASSERT(std::abs(byId.maxTimeUs - 30.0) < 0.001, "recordById must track the maximum");
+    OPTIGD_ASSERT(std::abs(byId.getMeanTimeUs() - 20.0) < 0.001, "Mean must be total / count");
+
+    // The name based API must resolve to the same slot, not a separate one.
+    prof.record("VisibilityCuller", 10.0);
+    auto byName = prof.getMetric("VisibilityCuller");
+    OPTIGD_ASSERT(byName.callCount == 3,
+                  "record(name) must reuse the fast slot for known metric names");
+    OPTIGD_ASSERT(std::abs(byName.totalTimeUs - 50.0) < 0.001,
+                  "Name and id paths must share the same accumulator");
+
+    // Unknown/ad-hoc names still work through the overflow map.
+    prof.record("AdHocInstrumentation", 5.0);
+    OPTIGD_ASSERT(prof.getMetric("AdHocInstrumentation").callCount == 1,
+                  "Ad-hoc metric names must still be recorded");
+
+    bool foundFast = false;
+    for (const auto& metric : prof.getSnapshot()) {
+        if (metric.name == "VisibilityCuller" && metric.callCount == 3) {
+            foundFast = true;
+        }
+    }
+    OPTIGD_ASSERT(foundFast, "getSnapshot must include fast-path metrics");
+
+    prof.reset();
+    OPTIGD_ASSERT(prof.getById(optigd::profiling::MetricId::VisibilityCuller).callCount == 0,
+                  "reset() must clear fast-path metrics too");
+
+    OPTIGD_PASS();
+}
+
+// 19. Regression: the GD version gate must compare against the exact target
+//     build. A `starts_with("2.2")` test accepts GD 2.21x, whose structure
+//     layouts differ from the 2.2081 bindings OptiGD is compiled against.
+void testGdVersionCompatibilityGate() {
+    using optigd::compat::CompatibilityLayer;
+
+    OPTIGD_ASSERT(CompatibilityLayer::isSupportedGDVersion("2.2081"),
+                  "The pinned target GD 2.2081 must be supported");
+    OPTIGD_ASSERT(CompatibilityLayer::isSupportedGDVersion("v2.2081"),
+                  "A leading 'v' must be tolerated");
+    OPTIGD_ASSERT(CompatibilityLayer::isSupportedGDVersion("*"),
+                  "'*' remains the explicit standalone-harness opt-out");
+
+    OPTIGD_ASSERT(!CompatibilityLayer::isSupportedGDVersion("2.21"),
+                  "GD 2.21 must be rejected even though it starts with '2.2'");
+    OPTIGD_ASSERT(!CompatibilityLayer::isSupportedGDVersion("2.2074"),
+                  "An older GD build must be rejected");
+    OPTIGD_ASSERT(!CompatibilityLayer::isSupportedGDVersion("3.0"),
+                  "A different GD major version must be rejected");
+    OPTIGD_ASSERT(!CompatibilityLayer::isSupportedGDVersion(""),
+                  "An empty version string must be rejected");
+    OPTIGD_ASSERT(!CompatibilityLayer::isSupportedGDVersion("banana"),
+                  "A non-numeric version string must be rejected");
+
+    int major = 0, minor = 0, patch = 0;
+    OPTIGD_ASSERT(CompatibilityLayer::parseVersionComponents("2.2081", major, minor, patch),
+                  "parseVersionComponents must succeed on a dotted numeric version");
+    OPTIGD_ASSERT(major == 2 && minor == 2081 && patch < 0,
+                  "GD 2.2081 parses to major 2, minor 2081 and no patch component");
+
+    OPTIGD_PASS();
+}
+
+// 20. Regression: tier defaults must come from one table.
+//     ConfigManager's presets and AdaptiveGovernor's automatic transitions used
+//     to carry independent copies of the same numbers, so a tier reached by an
+//     automatic downgrade could differ from the same tier selected by hand.
+void testTierDefaultsSingleSource() {
+    // The table itself.
+    const auto& low = optigd::core::kTierDefaults[static_cast<size_t>(optigd::core::PerformanceTier::LowEnd)];
+    const auto& bal = optigd::core::kTierDefaults[static_cast<size_t>(optigd::core::PerformanceTier::Balanced)];
+    const auto& high = optigd::core::kTierDefaults[static_cast<size_t>(optigd::core::PerformanceTier::HighEnd)];
+
+    OPTIGD_ASSERT(low.particleDensityScale == 0.5f && low.maxActiveParticles == 2048 &&
+                      low.cullOffscreenEmitters && low.cameraPaddingX == 120.0f &&
+                      low.cameraPaddingY == 80.0f,
+                  "LowEnd tier defaults must be 0.5 / 2048 / true / 120 / 80");
+    OPTIGD_ASSERT(bal.particleDensityScale == 0.75f && bal.maxActiveParticles == 4096 &&
+                      bal.cullOffscreenEmitters && bal.cameraPaddingX == 150.0f &&
+                      bal.cameraPaddingY == 100.0f,
+                  "Balanced tier defaults must be 0.75 / 4096 / true / 150 / 100");
+    OPTIGD_ASSERT(high.particleDensityScale == 1.0f && high.maxActiveParticles == 8192 &&
+                      !high.cullOffscreenEmitters && high.cameraPaddingX == 200.0f &&
+                      high.cameraPaddingY == 150.0f,
+                  "HighEnd tier defaults must be 1.0 / 8192 / false / 200 / 150");
+
+    // applyTierDefaults must be a no-op for Custom so user values survive.
+    optigd::core::OptiConfig cfg;
+    cfg.particleDensityScale = 0.33f;
+    cfg.maxActiveParticles = 777;
+    cfg.cameraPaddingX = 11.0f;
+    cfg.cameraPaddingY = 22.0f;
+    optigd::core::applyTierDefaults(cfg, optigd::core::PerformanceTier::Custom);
+    OPTIGD_ASSERT(cfg.particleDensityScale == 0.33f && cfg.maxActiveParticles == 777 &&
+                      cfg.cameraPaddingX == 11.0f && cfg.cameraPaddingY == 22.0f,
+                  "applyTierDefaults must not touch a Custom tier config");
+
+    // Applying a real tier must produce exactly the table values.
+    optigd::core::applyTierDefaults(cfg, optigd::core::PerformanceTier::Balanced);
+    OPTIGD_ASSERT(cfg.particleDensityScale == bal.particleDensityScale &&
+                      cfg.maxActiveParticles == bal.maxActiveParticles &&
+                      cfg.cullOffscreenEmitters == bal.cullOffscreenEmitters &&
+                      cfg.cameraPaddingX == bal.cameraPaddingX &&
+                      cfg.cameraPaddingY == bal.cameraPaddingY,
+                  "applyTierDefaults must apply the shared table verbatim");
+
+    // The two consumers must agree: an automatic governor downgrade from
+    // HighEnd must land on the same numbers ConfigManager's preset produces.
+    optigd::core::OptiConfig govCfg;
+    govCfg.tier = optigd::core::PerformanceTier::HighEnd;
+    govCfg.targetFrameRate = 60.0f;
+    optigd::adaptive::AdaptiveGovernor gov(govCfg);
+    optigd::core::MemoryArena arena(16384);
+    for (int i = 0; i < 40; ++i) {
+        arena.reset();
+        gov.recordFrameTime(25000.0);
+        gov.update(govCfg, &arena);
+    }
+    OPTIGD_ASSERT(govCfg.tier != optigd::core::PerformanceTier::HighEnd,
+                  "Governor must downgrade away from HighEnd under budget pressure");
+
+    auto& cfgMgr = optigd::config::ConfigManager::instance();
+    optigd::config::RuntimeSettingsInput input{};
+    input.tierPreset = (govCfg.tier == optigd::core::PerformanceTier::LowEnd) ? "LowEnd" : "Balanced";
+    auto presetCfg = cfgMgr.syncFromSettings(input);
+
+    OPTIGD_ASSERT(std::abs(presetCfg.particleDensityScale - govCfg.particleDensityScale) < 0.001f &&
+                      presetCfg.maxActiveParticles == govCfg.maxActiveParticles &&
+                      presetCfg.cullOffscreenEmitters == govCfg.cullOffscreenEmitters &&
+                      std::abs(presetCfg.cameraPaddingX - govCfg.cameraPaddingX) < 0.001f &&
+                      std::abs(presetCfg.cameraPaddingY - govCfg.cameraPaddingY) < 0.001f,
+                  "Automatic tier transitions and hand-picked presets must agree");
+
+    OPTIGD_PASS();
+}
+
 } // namespace
 
-int main() {
+// Writes a real diagnostics JSON report to disk so CI can schema-validate the
+// exact artefact the mod produces on level exit. Invoked with
+// `--emit-report <path>`; does not affect the pass/fail result of the suite.
+int emitDiagnosticsReport(const std::string& path) {
+    auto& mgr = optigd::core::OptiGDManager::instance();
+    mgr.shutdown();
+    mgr.initialize();
+    mgr.onLevelLoad();
+
+    int dummyNode = 7;
+    mgr.getVisibilityCuller().registerObject(
+        1, optigd::core::Rect2D(100.0f, 100.0f, 30.0f, 30.0f), &dummyNode, true, true);
+
+    for (int f = 0; f < 60; ++f) {
+        mgr.beginFrame();
+        mgr.setExternalFrameDeltaUs(16666.0);
+        mgr.recordHeapAllocationAvoided(1);
+        mgr.recordCullingTimeUs(5.0);
+        mgr.recordParticleTimeUs(2.0);
+        mgr.recordMatrixTimeUs(1.0);
+        mgr.getVisibilityCuller().evaluateVisibilityDelta(
+            optigd::core::Rect2D(0.0f, 0.0f, 800.0f, 600.0f), mgr.getFrameArena());
+        mgr.endFrame();
+    }
+
+    std::ofstream ofs(path);
+    if (!ofs.is_open()) {
+        std::cerr << "[FAIL] unable to open report path: " << path << "\n";
+        return 1;
+    }
+    ofs << optigd::diagnostics::DiagnosticsEngine::instance().generateJsonReport(
+        mgr.getActiveConfig(),
+        mgr.getFallbackManager().getFallbackHistory(),
+        mgr.getAdaptiveGovernor().getTierTransitions());
+    ofs.close();
+    mgr.onLevelExit();
+    std::cout << "[INFO] wrote diagnostics report to " << path << "\n";
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        std::string_view arg(argv[i]);
+        if (arg == "--emit-report" && i + 1 < argc) {
+            return emitDiagnosticsReport(argv[i + 1]);
+        }
+    }
+
     std::cout << "========================================\n";
     std::cout << "  OptiGD v" << optigd::core::kOptiGDVersion << " Unit & Integration Suite\n";
     std::cout << "========================================\n";
@@ -552,6 +1136,17 @@ int main() {
     testAdaptiveGovernorAndFallback();
     testConfigAndPresetSync();
     testManagerAndCompatibility();
+    testGeodeVersionMetadataGrammar();
+    testVisibilityCullerCellSizeReindex();
+    testParticleGovernorIncrementalTotals();
+    testDiagnosticsJsonEscaping();
+    testConfigDeserializeRobustness();
+    testCameraWorldRectConvention();
+    testMatrixCacheStaleEntryPruning();
+    testFallbackRecoveryDuringCooldown();
+    testProfilerFastPath();
+    testGdVersionCompatibilityGate();
+    testTierDefaultsSingleSource();
 
     std::cout << "----------------------------------------\n";
     std::cout << "Tests Passed: " << g_testsPassed << "\n";
