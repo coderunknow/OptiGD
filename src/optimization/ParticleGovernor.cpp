@@ -1,98 +1,141 @@
 #include "ParticleGovernor.hpp"
+
 #include <algorithm>
+#include <cmath>
 
 namespace optigd::optimization {
 
+namespace {
+
+bool emitterIntersects(const core::Point2D& center, float radius, const core::Rect2D& rect) {
+    const core::Rect2D bounds(center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f);
+    return rect.intersects(bounds);
+}
+
+} // namespace
+
 ParticleGovernor::ParticleGovernor(float densityScale, uint32_t globalMax)
-    : m_densityScale(densityScale), m_globalMaxParticles(globalMax) {}
+    : m_densityScale(std::clamp(densityScale, 0.05f, 1.0f)),
+      m_globalMaxParticles(std::max<uint32_t>(globalMax, 128)) {}
 
 void ParticleGovernor::setDensityScale(float scale) {
-    m_densityScale = std::clamp(scale, 0.05f, 1.0f);
+    m_densityScale = std::isfinite(scale) ? std::clamp(scale, 0.05f, 1.0f) : 1.0f;
 }
 
 void ParticleGovernor::setGlobalParticleLimit(uint32_t limit) {
     m_globalMaxParticles = std::max<uint32_t>(limit, 128);
 }
 
+void ParticleGovernor::setHysteresis(float sleepMarginPx, float wakeMarginPx) {
+    if (!std::isfinite(sleepMarginPx) || !std::isfinite(wakeMarginPx)) return;
+    m_sleepMargin = std::max(0.0f, sleepMarginPx);
+    // wake margin must not exceed sleep margin, otherwise the hysteresis band inverts.
+    m_wakeMargin = std::clamp(wakeMarginPx, 0.0f, m_sleepMargin);
+}
+
 void ParticleGovernor::clear() {
     m_emitters.clear();
-    m_currentTotalParticles = 0;
-    m_lastCulledEmitters = 0;
+    m_liveEmitters = 0;
+    m_awakeParticles = 0;
+    m_sleepingEmitters = 0;
+    m_sleepTransitions = 0;
+    m_wakeTransitions = 0;
 }
 
-uint32_t ParticleGovernor::registerEmitter(uint32_t id, const core::Point2D& pos, float radius, ParticlePriority prio) {
-    m_emitters.push_back({id, pos, radius, prio, 0, 500, false});
-    return id;
+ParticleGovernor::Handle ParticleGovernor::registerEmitter(const core::Point2D& pos, float radius, ParticlePriority prio) {
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(radius) || radius < 0.0f) {
+        return kInvalidHandle;
+    }
+    Emitter e;
+    e.position = pos;
+    e.radius = radius;
+    e.priority = prio;
+    e.alive = true;
+    m_emitters.push_back(e);
+    m_liveEmitters++;
+    return static_cast<Handle>(m_emitters.size() - 1);
 }
 
-bool ParticleGovernor::evaluateEmitter(uint32_t id, const core::Rect2D& cameraRect, float& outEmissionMultiplier) {
-    if (id >= m_emitters.size()) {
-        outEmissionMultiplier = 1.0f;
-        return true;
+bool ParticleGovernor::unregisterEmitter(Handle handle) {
+    if (handle >= m_emitters.size() || !m_emitters[handle].alive) return false;
+    Emitter& e = m_emitters[handle];
+    if (e.sleeping) {
+        m_sleepingEmitters--;
+    } else {
+        m_awakeParticles -= e.activeParticles;
     }
-
-    auto& emitter = m_emitters[id];
-
-    // Critical particles always update regardless of offscreen position (e.g. player trail)
-    if (emitter.priority == ParticlePriority::Critical) {
-        outEmissionMultiplier = 1.0f;
-        emitter.isSleeping = false;
-        return true;
-    }
-
-    // Check if emitter bounding circle/rect intersects camera viewport (+ 100 margin)
-    if (m_cullOffscreen) {
-        core::Rect2D emitterBounds(
-            emitter.position.x - emitter.emitterRadius,
-            emitter.position.y - emitter.emitterRadius,
-            emitter.emitterRadius * 2.0f,
-            emitter.emitterRadius * 2.0f
-        );
-
-        core::Rect2D paddedCamera = cameraRect.expanded(120.0f, 120.0f);
-        if (!paddedCamera.intersects(emitterBounds)) {
-            // Offscreen: sleep emitter
-            emitter.isSleeping = true;
-            outEmissionMultiplier = 0.0f;
-            return false;
-        }
-    }
-
-    emitter.isSleeping = false;
-
-    // Apply density scaling
-    float multiplier = m_densityScale;
-
-    // If approaching global particle budget, aggressively throttle cosmetic particles
-    if (m_currentTotalParticles > m_globalMaxParticles) {
-        if (emitter.priority == ParticlePriority::Cosmetic) {
-            multiplier *= 0.25f;
-        } else {
-            multiplier *= 0.5f;
-        }
-    }
-
-    outEmissionMultiplier = multiplier;
+    e.alive = false;
+    e.activeParticles = 0;
+    e.sleeping = false;
+    m_liveEmitters--;
     return true;
 }
 
-void ParticleGovernor::recordActiveParticles(uint32_t emitterId, uint32_t count) {
-    if (emitterId < m_emitters.size()) {
-        m_emitters[emitterId].activeParticleCount = count;
+EmitterDecision ParticleGovernor::evaluateEmitter(Handle handle, const core::Rect2D& cameraRect) {
+    EmitterDecision decision;
+    if (handle >= m_emitters.size() || !m_emitters[handle].alive) {
+        return decision; // unknown emitter: leave it alone
+    }
+    Emitter& e = m_emitters[handle];
+
+    // Critical emitters always run at full density.
+    if (e.priority == ParticlePriority::Critical || !m_cullOffscreen) {
+        if (e.sleeping) {
+            e.sleeping = false;
+            m_sleepingEmitters--;
+            m_awakeParticles += e.activeParticles;
+            m_wakeTransitions++;
+            decision.justWoke = true;
+        }
+        decision.active = true;
+        decision.emissionMultiplier = (e.priority == ParticlePriority::Critical) ? 1.0f : m_densityScale;
+        return decision;
     }
 
-    // Recalculate total
-    uint32_t total = 0;
-    uint32_t culled = 0;
-    for (const auto& em : m_emitters) {
-        if (em.isSleeping) {
-            culled++;
-        } else {
-            total += em.activeParticleCount;
+    if (!e.sleeping) {
+        // Awake: sleep only when clearly outside the camera.
+        if (!emitterIntersects(e.position, e.radius, cameraRect.expanded(m_sleepMargin, m_sleepMargin))) {
+            e.sleeping = true;
+            m_awakeParticles -= e.activeParticles;
+            m_sleepingEmitters++;
+            m_sleepTransitions++;
+            decision.justSlept = true;
+        }
+    } else {
+        // Asleep: wake only once inside the (smaller) wake margin.
+        if (emitterIntersects(e.position, e.radius, cameraRect.expanded(m_wakeMargin, m_wakeMargin))) {
+            e.sleeping = false;
+            m_sleepingEmitters--;
+            m_awakeParticles += e.activeParticles;
+            m_wakeTransitions++;
+            decision.justWoke = true;
         }
     }
-    m_currentTotalParticles = total;
-    m_lastCulledEmitters = culled;
+
+    if (e.sleeping) {
+        decision.active = false;
+        decision.emissionMultiplier = 0.0f;
+        return decision;
+    }
+
+    float multiplier = m_densityScale;
+    if (m_awakeParticles > m_globalMaxParticles) {
+        // Over budget: throttle cosmetic emitters harder than standard ones.
+        multiplier *= (e.priority == ParticlePriority::Cosmetic) ? 0.25f : 0.5f;
+    }
+    decision.active = true;
+    decision.emissionMultiplier = multiplier;
+    return decision;
+}
+
+void ParticleGovernor::recordActiveParticles(Handle handle, uint32_t count) {
+    if (handle >= m_emitters.size() || !m_emitters[handle].alive) return;
+    Emitter& e = m_emitters[handle];
+    if (!e.sleeping) {
+        m_awakeParticles -= e.activeParticles;
+        m_awakeParticles += count;
+    }
+    e.activeParticles = count;
 }
 
 } // namespace optigd::optimization

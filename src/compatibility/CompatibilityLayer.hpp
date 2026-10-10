@@ -7,6 +7,7 @@
 #include <functional>
 #include <cstdint>
 #include <cstddef>
+#include "../core/Version.hpp"
 
 namespace optigd::compat {
 
@@ -44,8 +45,8 @@ public:
 
 private:
     CompatibilityLayer() = default;
-    std::string m_gdVersion{"2.2081"};
-    std::string m_geodeVersion{"v4.0.0"};
+    std::string m_gdVersion{optigd::kGeometryDashVersion};
+    std::string m_geodeVersion{optigd::kOptiGDGeodeVersion};
     std::unordered_map<std::string, ModFeatureInfo> m_features;
 };
 

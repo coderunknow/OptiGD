@@ -1,7 +1,7 @@
 # =============================================================================
 #  OptiGD — Automated Release Pipeline
 # =============================================================================
-#  Trigger : push tag có định dạng v* (ví dụ: v1.0.0, v1.2.2, v1.1.0-rc1)
+#  Trigger : push tag có định dạng v* (ví dụ: v0.1.0-beta1, v1.2.2, v1.1.0-rc1)
 #  Output  : GitHub Release (public ngay) với:
 #            - Tiêu đề      = tên tag
 #            - Release Notes = GitHub tự sinh từ commits + CHANGELOG.md
@@ -41,7 +41,7 @@ jobs:
       mod_version: ${{ steps.compare.outputs.mod_version }}
       mismatch: ${{ steps.compare.outputs.mismatch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Compare tag with mod.json version
         id: compare
@@ -57,12 +57,16 @@ jobs:
           fi
 
           TAG="${TAG_NAME#v}"
+          # Tags write beta1; Geode mod.json writes beta.1. Compare on the normalised form.
+          normalise() { printf '%s' "$1" | sed -E 's/-(alpha|beta|rc|pr)\.([0-9])/-\1\2/'; }
           if ! MOD_VERSION_RAW="$(jq -er '.version | select(type == "string")' mod.json)"; then
             echo "::error file=mod.json,title=Missing version::mod.json must contain a string version field."
             exit 1
           fi
 
           MOD_VERSION="${MOD_VERSION_RAW#v}"
+          MOD_VERSION_NORM="$(normalise "$MOD_VERSION")"
+          TAG_NORM="$(normalise "$TAG")"
           VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
           if [[ ! "$MOD_VERSION" =~ $VERSION_PATTERN ]]; then
             echo "::error file=mod.json,title=Invalid version::mod.json version '$MOD_VERSION_RAW' is not a valid SemVer version."
@@ -74,7 +78,7 @@ jobs:
 
           echo "Tag (không có tiền tố v): $TAG"
           echo "Version trong mod.json  : $MOD_VERSION"
-          if [[ "$TAG" == "$MOD_VERSION" ]]; then
+          if [[ "$TAG_NORM" == "$MOD_VERSION_NORM" ]]; then
             printf 'mismatch=false\n' >> "$GITHUB_OUTPUT"
             echo "Version khớp với tag. ✅"
           else
@@ -107,13 +111,16 @@ jobs:
             os: ubuntu-latest
             target: Android64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build the mod
         id: build
-        uses: geode-sdk/build-geode-mod@main
+        uses: geode-sdk/build-geode-mod@a0f7676e6fcd1a584f6d0c1c800239008412defc # main @ 2026-10-10
         with:
-          sdk: latest
+          sdk: given
+          cli: v3.9.0
+          bindings: geode-sdk/bindings
+          bindings-ref: f8aec5d1f3df76d840dfd2609f02cef30dc6efdf
           combine: false
           target: ${{ matrix.config.target }}
 
@@ -161,7 +168,7 @@ jobs:
           Write-Output "Verified $($files[0].FullName) ($($files[0].Length) bytes)"
 
       - name: Upload target artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: geode-build-${{ matrix.config.target }}
           path: ${{ steps.build.outputs.build-output }}/*.geode
@@ -178,22 +185,22 @@ jobs:
     permissions:
       contents: write   # BẮT BUỘC: quyền tạo Release / upload assets
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download Win64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: geode-build-Win64
           path: release-inputs/Win64
 
       - name: Download Android32 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: geode-build-Android32
           path: release-inputs/Android32
 
       - name: Download Android64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: geode-build-Android64
           path: release-inputs/Android64
@@ -296,7 +303,7 @@ jobs:
           fi
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true

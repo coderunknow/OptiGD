@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <cmath>
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
 
 namespace optigd::core {
 
@@ -28,6 +28,8 @@ struct Size2D {
     constexpr Size2D(float w, float h) : width(w), height(h) {}
 };
 
+// Axis-aligned rectangle. origin is the minimum corner for normalized rectangles;
+// SpatialHash normalizes negative sizes before use.
 struct Rect2D {
     Point2D origin{};
     Size2D size{};
@@ -41,6 +43,7 @@ struct Rect2D {
     constexpr float minY() const { return origin.y; }
     constexpr float maxY() const { return origin.y + size.height; }
 
+    // Inclusive intersection test (touching edges intersect).
     constexpr bool intersects(const Rect2D& o) const {
         return !(maxX() < o.minX() || minX() > o.maxX() ||
                  maxY() < o.minY() || minY() > o.maxY());
@@ -57,16 +60,18 @@ struct Rect2D {
     }
 };
 
+// Performance tiers. LowEnd is the most aggressive setting, HighEnd the least.
+// Custom uses the user's own tuning values and is never changed automatically.
 enum class PerformanceTier : uint8_t {
-    LowEnd = 0,     // High performance mode (aggressive culling, reduced particles)
-    Balanced = 1,   // Balanced mode (default visual fidelity with smooth pacing)
-    HighEnd = 2,    // Maximum visual fidelity, minimal throttling
-    Custom = 3      // Custom user configuration
+    LowEnd = 0,
+    Balanced = 1,
+    HighEnd = 2,
+    Custom = 3
 };
 
 inline const char* tierToString(PerformanceTier tier) {
     switch (tier) {
-        case PerformanceTier::LowEnd: return "LowEnd (High Performance)";
+        case PerformanceTier::LowEnd: return "LowEnd";
         case PerformanceTier::Balanced: return "Balanced";
         case PerformanceTier::HighEnd: return "HighEnd";
         case PerformanceTier::Custom: return "Custom";
@@ -74,64 +79,63 @@ inline const char* tierToString(PerformanceTier tier) {
     }
 }
 
+// Per-feature switches. Defaults reflect the evidence available for each feature
+// (see EVIDENCE_REPORT.md). A feature set to true whose status is not VERIFIED is
+// still only an experiment; the status column documents what has been checked.
 struct OptimizationFlags {
-    bool enableSpatialCulling{true};
-    bool enableParticleThrottling{true};
-    bool enableTriggerIndexing{true};
-    bool enableMatrixCaching{true};
-    bool enableAdaptiveGovernor{true};
-    bool enableMemoryArena{true};
-    bool enableDiagnosticsOverlay{false};
+    bool enableSpatialCulling{false};      // shadow measurement only in v0.1.0-beta1 (no gameplay effect)
+    bool enableParticleThrottling{false};  // not connected to gameplay in v0.1.0-beta1
+    bool enableTriggerIndexing{false};     // not connected to gameplay in v0.1.0-beta1
+    bool enableMatrixCaching{false};       // not connected to gameplay in v0.1.0-beta1
+    bool enableAdaptiveGovernor{true};     // adjusts effective runtime tuning only
+    bool enableDiagnosticsOverlay{false};  // in-game label
+    bool enableFrameTimeRecorder{false};   // local CSV of frame timings
 };
 
 struct OptiConfig {
-    PerformanceTier tier{PerformanceTier::LowEnd}; // LowEnd by default per user configuration
+    PerformanceTier tier{PerformanceTier::LowEnd};
     OptimizationFlags flags{};
 
-    // Spatial hash parameters
+    // Spatial culling (shadow measurement) parameters
     float spatialCellSize{128.0f};
-    float cameraPaddingX{150.0f};
-    float cameraPaddingY{100.0f};
+    float cameraPaddingX{120.0f};
+    float cameraPaddingY{80.0f};
 
-    // Particle throttling parameters
-    float particleDensityScale{0.5f}; // 50% max density in LowEnd mode
+    // Particle parameters (used only when particle throttling is connected)
+    float particleDensityScale{0.5f};
     uint32_t maxActiveParticles{2048};
     bool cullOffscreenEmitters{true};
 
-    // Trigger optimization parameters
-    bool sortTriggersByPosition{true};
+    // Trigger parameters (used only when trigger indexing is connected)
     float triggerLookaheadDistance{800.0f};
 
-    // Adaptive Governor parameters
+    // Frame pacing
     float targetFrameRate{60.0f};
-    float targetFrameTimeMs{16.666f};
-    float fallbackVarianceThresholdMs{4.0f};
-    uint32_t fallbackCooldownFrames{120}; // Hysteresis frames before re-evaluating
-    float maxGovernorOverheadBudgetUs{50.0f}; // Microseconds limit for governor itself
-
-    // Memory arena parameters
-    size_t arenaInitialCapacity{1024 * 1024}; // 1 MB scratch arena
+    float targetFrameTimeMs{1000.0f / 60.0f};
 };
 
+// Per-frame measurements. Every field has the exact meaning given here.
 struct FrameStats {
     uint64_t frameIndex{0};
-    double totalFrameTimeUs{0.0};
-    double cullingTimeUs{0.0};
-    double particleTimeUs{0.0};
-    double triggerTimeUs{0.0};
-    double matrixTimeUs{0.0};
-    double governorOverheadUs{0.0};
+    // Wall-clock time between the start of this game frame and the previous one.
+    // Includes rendering and any other work done between frames. 0 when there is no
+    // valid previous frame (first frame, or a discontinuity such as a pause).
+    double frameIntervalUs{0.0};
+    // CPU time spent inside the original PlayLayer::postUpdate (game logic on the CPU thread).
+    double gameUpdateUs{0.0};
+    // CPU time spent in OptiGD code during this frame (excludes the original update).
+    double optigdOverheadUs{0.0};
+    // CPU time spent in the spatial-culling shadow measurement (subset of optigdOverheadUs).
+    double cullingShadowUs{0.0};
 
+    // Shadow measurement: objects registered with the culler and how many of them
+    // lie outside the padded camera rectangle. No object is hidden by this.
     uint32_t totalObjects{0};
-    uint32_t visibleObjects{0};
-    uint32_t culledObjects{0};
-    uint32_t totalParticles{0};
-    uint32_t culledParticles{0};
-    uint32_t totalTriggers{0};
-    uint32_t evaluatedTriggers{0};
+    uint32_t shadowVisibleObjects{0};
+    uint32_t shadowCulledObjects{0};
 
-    size_t arenaAllocatedBytes{0};
-    size_t heapAllocationsAvoided{0};
+    // Number of MemoryArena allocations during the frame (0 when the arena is unused).
+    size_t arenaAllocations{0};
 };
 
 } // namespace optigd::core

@@ -1,62 +1,80 @@
 #include "FallbackManager.hpp"
 #include "../core/Logger.hpp"
 
+#include <algorithm>
+#include <cmath>
+
 namespace optigd::adaptive {
 
 FallbackManager::FallbackManager(float varianceThresholdMs, uint32_t cooldownFrames)
-    : m_varianceThresholdMs(varianceThresholdMs), m_cooldownFrames(cooldownFrames) {}
+    : m_varianceThresholdMs(std::isfinite(varianceThresholdMs) && varianceThresholdMs > 0.0f ? varianceThresholdMs : 4.0f),
+      m_cooldownFrames(cooldownFrames) {}
 
-bool FallbackManager::checkAndApplyFallbacks(uint64_t currentFrame, const WindowStats& stats, core::OptiConfig& config) {
-    if (m_userOverride) {
-        return false; // User manually overrides fallback logic
+void FallbackManager::setVarianceThreshold(float thresholdMs) {
+    if (std::isfinite(thresholdMs) && thresholdMs > 0.0f) {
+        m_varianceThresholdMs = thresholdMs;
     }
+}
 
+void FallbackManager::setUserOverride(bool userOverride) {
+    m_userOverride = userOverride;
+    if (userOverride && m_level > 0) {
+        m_level = 0;
+        m_cooldownRemaining = 0;
+    }
+}
+
+bool FallbackManager::update(uint64_t currentFrame, const WindowStats& stats, const core::OptiConfig& userConfig) {
+    if (m_userOverride || stats.sampleCount == 0) {
+        return false;
+    }
     if (m_cooldownRemaining > 0) {
         m_cooldownRemaining--;
         return false;
     }
 
-    // Check for severe frame-time variance/jitter regression
-    if (stats.stdDevMs > m_varianceThresholdMs && stats.fps < (config.targetFrameRate * 0.8f)) {
-        m_fallbackActive = true;
+    const double target = static_cast<double>(userConfig.targetFrameRate);
+    const bool jitter = stats.stdDevMs > m_varianceThresholdMs && stats.fps < target * 0.8;
+    const bool stable = stats.stdDevMs < m_varianceThresholdMs * 0.5 && stats.fps >= target * 0.95;
+
+    if (jitter && m_level < kMaxLevel) {
+        m_level++;
         m_cooldownRemaining = m_cooldownFrames;
-
-        std::string reason = "Frame-time jitter (" + std::to_string(stats.stdDevMs) +
-                             "ms) exceeded variance threshold (" +
-                             std::to_string(m_varianceThresholdMs) + "ms)";
-        std::string action;
-
-        // Downgrade aggressiveness safely
-        if (config.particleDensityScale > 0.25f) {
-            config.particleDensityScale = 0.25f;
-            action = "Reduced particle density to 25% and expanded camera culling padding to prevent boundary thrashing";
-            config.cameraPaddingX += 50.0f;
-            config.cameraPaddingY += 50.0f;
-        } else {
-            // Further fallback
-            config.maxActiveParticles = 1024;
-            action = "Capped active particles to 1024 and enabled strict boundary culling";
-        }
-
-        FallbackEvent evt{currentFrame, reason, action};
-        m_history.push_back(evt);
-
-        OPTIGD_LOG_WARN(std::string("FallbackManager: ") + reason + ". Action taken: " + action);
+        const std::string reason = "Frame-time jitter " + std::to_string(stats.stdDevMs) +
+                                   " ms above threshold " + std::to_string(m_varianceThresholdMs) + " ms";
+        const std::string action = (m_level == 1)
+            ? "Level 1: particle density capped to 25% and camera padding +50 px"
+            : "Level 2: active particles capped to 1024 (plus level 1)";
+        m_history.push_back({currentFrame, m_level, reason, action});
+        OPTIGD_LOG_WARN("FallbackManager: " + reason + ". " + action);
         return true;
     }
 
-    // If performance is stable and variance is very low, clear fallback state after cooldown
-    if (m_fallbackActive && stats.stdDevMs < (m_varianceThresholdMs * 0.5f) && stats.fps >= (config.targetFrameRate * 0.95f)) {
-        m_fallbackActive = false;
-        OPTIGD_LOG_INFO("FallbackManager: Frame-time variance stabilized below threshold. Returning to standard governor control.");
+    if (stable && m_level > 0) {
+        m_level--;
+        m_cooldownRemaining = m_cooldownFrames;
+        const std::string action = "Recovered to level " + std::to_string(m_level);
+        m_history.push_back({currentFrame, m_level, "Frame times stable", action});
+        OPTIGD_LOG_INFO("FallbackManager: " + action);
+        return true;
     }
-
     return false;
+}
+
+void FallbackManager::apply(core::OptiConfig& effectiveConfig) const {
+    if (m_level >= 1) {
+        effectiveConfig.particleDensityScale = std::min(effectiveConfig.particleDensityScale, 0.25f);
+        effectiveConfig.cameraPaddingX += 50.0f;
+        effectiveConfig.cameraPaddingY += 50.0f;
+    }
+    if (m_level >= 2) {
+        effectiveConfig.maxActiveParticles = std::min<uint32_t>(effectiveConfig.maxActiveParticles, 1024u);
+    }
 }
 
 void FallbackManager::reset() {
     m_cooldownRemaining = 0;
-    m_fallbackActive = false;
+    m_level = 0;
     m_history.clear();
 }
 

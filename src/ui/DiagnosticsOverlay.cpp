@@ -1,6 +1,8 @@
 #include "DiagnosticsOverlay.hpp"
-#include <sstream>
+#include "../core/Version.hpp"
+
 #include <iomanip>
+#include <sstream>
 
 namespace optigd::ui {
 
@@ -17,29 +19,25 @@ std::vector<std::string> DiagnosticsOverlay::formatOverlayLines(
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(1);
 
-    // Line 1: FPS & Frame Time
-    ss << "OptiGD v1.0.0 | " << summary.averageFps << " FPS ("
-       << summary.meanFrameTimeMs << " ms, jitter: " << summary.frameTimeStdDevMs << " ms)";
+    ss << "OptiGD " << kOptiGDVersion << " | " << summary.averageFps << " FPS ("
+       << summary.meanFrameIntervalMs << " ms, jitter " << summary.frameIntervalStdDevMs << " ms)";
     lines.push_back(ss.str());
 
-    // Line 2: Tier & Adaptation
     ss.str("");
     ss.clear();
-    ss << "Tier: " << core::tierToString(summary.activeTier);
+    ss << "Tier: " << core::tierToString(summary.effectiveTier);
     if (governor.isDynamicAdaptationEnabled()) {
-        ss << " [Adaptive]";
+        ss << " [adaptive]";
     }
-    if (summary.fallbacksTriggered > 0) {
-        ss << " [Fallbacks: " << summary.fallbacksTriggered << "]";
+    if (summary.fallbackEvents > 0) {
+        ss << " [fallback events: " << summary.fallbackEvents << "]";
     }
     lines.push_back(ss.str());
 
-    // Line 3: Culling & Allocations
     ss.str("");
     ss.clear();
-    ss << "Culling: " << (summary.averageCullingRatio * 100.0) << "% culled ("
-       << summary.totalObjectsCulled << "/" << summary.totalObjectsSeen << ") | "
-       << "Avoided Allocs: " << summary.totalHeapAllocsAvoided;
+    ss << "Shadow cull: " << (summary.shadowCullRatio * 100.0) << "% of "
+       << summary.totalShadowObjectsSeen << " object-frames (not applied)";
     lines.push_back(ss.str());
 
     return lines;
@@ -48,13 +46,11 @@ std::vector<std::string> DiagnosticsOverlay::formatOverlayLines(
 std::string DiagnosticsOverlay::getSingleLineSummary(
     const adaptive::AdaptiveGovernor& governor,
     const diagnostics::DiagnosticsSummary& summary) const {
-
+    (void)governor;
     std::ostringstream ss;
     ss << std::fixed << std::setprecision(1);
-    ss << "OptiGD: " << summary.averageFps << " FPS | "
-       << summary.meanFrameTimeMs << "ms | "
-       << "Tier: " << core::tierToString(summary.activeTier) << " | "
-       << (summary.averageCullingRatio * 100.0) << "% culled";
+    ss << "OptiGD: " << summary.averageFps << " FPS | " << summary.meanFrameIntervalMs << " ms | "
+       << "Tier: " << core::tierToString(summary.effectiveTier);
     return ss.str();
 }
 

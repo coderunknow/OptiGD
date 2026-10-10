@@ -12,7 +12,7 @@ void Profiler::record(std::string_view name, double durationUs) {
     if (!m_enabled) return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_metrics.find(std::string(name));
+    auto it = m_metrics.find(name);  // no allocation for an existing metric
     if (it == m_metrics.end()) {
         ProfileMetric metric;
         metric.name = std::string(name);
@@ -47,7 +47,7 @@ std::vector<ProfileMetric> Profiler::getSnapshot() const {
 
 ProfileMetric Profiler::getMetric(std::string_view name) const {
     std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_metrics.find(std::string(name));
+    auto it = m_metrics.find(name);
     if (it != m_metrics.end()) {
         return it->second;
     }

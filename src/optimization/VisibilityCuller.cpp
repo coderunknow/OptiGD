@@ -1,4 +1,6 @@
 #include "VisibilityCuller.hpp"
+
+#include <algorithm>
 #include <cmath>
 
 namespace optigd::optimization {
@@ -8,55 +10,52 @@ VisibilityCuller::VisibilityCuller(float cellSize)
 
 void VisibilityCuller::setCellSize(float cellSize) {
     m_spatialHash.setCellSize(cellSize);
+    m_lastCulledCount = 0;
+    m_lastVisibleCount = 0;
 }
 
 void VisibilityCuller::setPadding(float padX, float padY) {
-    m_padX = padX;
-    m_padY = padY;
+    m_padX = std::isfinite(padX) ? std::max(0.0f, padX) : 0.0f;
+    m_padY = std::isfinite(padY) ? std::max(0.0f, padY) : 0.0f;
 }
 
 void VisibilityCuller::clear() {
     m_spatialHash.clear();
-    m_objects.clear();
     m_lastCulledCount = 0;
     m_lastVisibleCount = 0;
-    m_cameraCached = false;
 }
 
 void VisibilityCuller::reserve(size_t capacity) {
     m_spatialHash.reserve(capacity);
-    m_objects.reserve(capacity);
 }
 
-uint32_t VisibilityCuller::registerObject(uint32_t id, const core::Rect2D& bounds, void* nativePtr, bool isStatic) {
-    m_objects.push_back({id, bounds, nativePtr, true, isStatic});
-    m_spatialHash.insert(bounds, nativePtr);
-    return id;
+VisibilityCuller::Handle VisibilityCuller::registerObject(const core::Rect2D& bounds, void* nativePtr, bool isStatic) {
+    (void)isStatic; // reserved for future dynamic-object policies; not used by the index
+    return m_spatialHash.insert(bounds, nativePtr);
 }
 
-void VisibilityCuller::updateObjectBounds(uint32_t id, const core::Rect2D& newBounds) {
-    if (id < m_objects.size()) {
-        m_objects[id].bounds = newBounds;
-        m_spatialHash.update(id, newBounds);
-    }
+bool VisibilityCuller::updateObjectBounds(Handle handle, const core::Rect2D& newBounds) {
+    return m_spatialHash.update(handle, newBounds);
+}
+
+bool VisibilityCuller::unregisterObject(Handle handle) {
+    return m_spatialHash.remove(handle);
 }
 
 size_t VisibilityCuller::cullAgainstCamera(const core::Rect2D& cameraRect, std::vector<void*>& outVisibleObjects) {
     outVisibleObjects.clear();
-    if (m_objects.empty()) {
+    const size_t total = m_spatialHash.getItemCount();
+    if (total == 0) {
         m_lastVisibleCount = 0;
         m_lastCulledCount = 0;
         return 0;
     }
 
-    core::Rect2D queryRect = cameraRect.expanded(m_padX, m_padY);
+    const core::Rect2D queryRect = cameraRect.expanded(m_padX, m_padY);
     m_spatialHash.query(queryRect, outVisibleObjects);
 
     m_lastVisibleCount = outVisibleObjects.size();
-    m_lastCulledCount = (m_objects.size() >= m_lastVisibleCount) ? (m_objects.size() - m_lastVisibleCount) : 0;
-    m_lastCameraRect = cameraRect;
-    m_cameraCached = true;
-
+    m_lastCulledCount = total - m_lastVisibleCount;
     return m_lastVisibleCount;
 }
 

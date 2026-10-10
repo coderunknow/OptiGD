@@ -1,112 +1,90 @@
 #include "MemoryArena.hpp"
-#include <cstdlib>
-#include <new>
+
 #include <algorithm>
 
 namespace optigd::core {
 
-MemoryArena::Block::Block(size_t s) : size(s), offset(0) {
-    memory = static_cast<uint8_t*>(std::malloc(size));
-    if (!memory) {
-        throw std::bad_alloc();
+MemoryArena::MemoryArena(size_t defaultBlockSize)
+    : m_defaultBlockSize(std::max<size_t>(defaultBlockSize, 64)) {
+    addBlock(m_defaultBlockSize);
+}
+
+bool MemoryArena::addBlock(size_t minBytes) {
+    size_t size = std::max(m_defaultBlockSize, minBytes);
+    if (size > kMaxBlockBytes) {
+        return false;
     }
-}
-
-MemoryArena::Block::~Block() {
-    if (memory) {
-        std::free(memory);
-        memory = nullptr;
+    Block block;
+    try {
+        block.memory = std::make_unique<uint8_t[]>(size);
+    } catch (const std::bad_alloc&) {
+        return false;
     }
+    block.size = size;
+    block.offset = 0;
+    m_blocks.push_back(std::move(block));
+    m_totalCapacity += size;
+    m_heapBlockAllocations++;
+    return true;
 }
 
-MemoryArena::Block::Block(Block&& other) noexcept
-    : memory(other.memory), size(other.size), offset(other.offset) {
-    other.memory = nullptr;
-    other.size = 0;
-    other.offset = 0;
-}
+void* MemoryArena::tryBlock(size_t index, size_t bytes, size_t alignment) {
+    Block& block = m_blocks[index];
+    const uintptr_t base = reinterpret_cast<uintptr_t>(block.memory.get());
+    const uintptr_t current = base + block.offset;
+    // Alignment is validated by the caller (power of two), so this mask is exact.
+    const uintptr_t aligned = (current + (alignment - 1)) & ~static_cast<uintptr_t>(alignment - 1);
+    const size_t padding = static_cast<size_t>(aligned - current);
 
-MemoryArena::Block& MemoryArena::Block::operator=(Block&& other) noexcept {
-    if (this != &other) {
-        if (memory) {
-            std::free(memory);
-        }
-        memory = other.memory;
-        size = other.size;
-        offset = other.offset;
-        other.memory = nullptr;
-        other.size = 0;
-        other.offset = 0;
+    const size_t remaining = block.size - block.offset; // offset <= size always
+    if (padding > remaining) {
+        return nullptr;
     }
-    return *this;
-}
-
-void* MemoryArena::Block::allocate(size_t bytes, size_t alignment) {
-    uintptr_t currentPtr = reinterpret_cast<uintptr_t>(memory + offset);
-    uintptr_t alignedPtr = (currentPtr + (alignment - 1)) & ~(alignment - 1);
-    size_t padding = alignedPtr - currentPtr;
-
-    if (offset + padding + bytes > size) {
+    if (bytes > remaining - padding) {
         return nullptr;
     }
 
-    offset += padding + bytes;
-    return reinterpret_cast<void*>(alignedPtr);
-}
-
-void MemoryArena::Block::reset() {
-    offset = 0;
-}
-
-MemoryArena::MemoryArena(size_t defaultBlockSize)
-    : m_defaultBlockSize(defaultBlockSize) {
-    allocateNewBlock(m_defaultBlockSize);
-}
-
-MemoryArena::~MemoryArena() = default;
-
-MemoryArena::MemoryArena(MemoryArena&&) noexcept = default;
-MemoryArena& MemoryArena::operator=(MemoryArena&&) noexcept = default;
-
-void MemoryArena::allocateNewBlock(size_t minSize) {
-    size_t blockSize = std::max(m_defaultBlockSize, minSize);
-    m_blocks.emplace_back(blockSize);
-    m_totalCapacity += blockSize;
+    const size_t consumed = padding + bytes;
+    block.offset += consumed;
+    m_usedBytes += consumed;
+    return reinterpret_cast<void*>(aligned);
 }
 
 void* MemoryArena::allocate(size_t bytes, size_t alignment) {
-    m_allocationCount++;
+    // Reject non-power-of-two (and zero) alignments instead of producing misaligned pointers.
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        return nullptr;
+    }
+    // Requests that cannot fit in any legal block are rejected before any arithmetic.
+    if (bytes > kMaxBlockBytes || alignment > kMaxBlockBytes) {
+        return nullptr;
+    }
 
-    if (m_currentBlockIndex < m_blocks.size()) {
-        void* ptr = m_blocks[m_currentBlockIndex].allocate(bytes, alignment);
-        if (ptr) {
-            m_usedBytes += bytes;
+    for (size_t i = m_currentBlockIndex; i < m_blocks.size(); ++i) {
+        if (void* ptr = tryBlock(i, bytes, alignment)) {
+            m_currentBlockIndex = i;
+            m_allocationCount++;
             return ptr;
         }
     }
 
-    // Try subsequent existing blocks if available
-    for (size_t i = m_currentBlockIndex + 1; i < m_blocks.size(); ++i) {
-        m_currentBlockIndex = i;
-        m_blocks[i].reset();
-        void* ptr = m_blocks[i].allocate(bytes, alignment);
-        if (ptr) {
-            m_usedBytes += bytes;
-            return ptr;
-        }
+    // No existing block fits: grow. A fresh block of at least bytes + alignment - 1
+    // always fits the request at offset 0.
+    const size_t needed = bytes + (alignment - 1);
+    if (!addBlock(needed)) {
+        return nullptr;
     }
-
-    // Allocate a new block
-    allocateNewBlock(bytes + alignment);
     m_currentBlockIndex = m_blocks.size() - 1;
-    void* ptr = m_blocks[m_currentBlockIndex].allocate(bytes, alignment);
-    m_usedBytes += bytes;
+    void* ptr = tryBlock(m_currentBlockIndex, bytes, alignment);
+    if (ptr) {
+        m_allocationCount++;
+    }
     return ptr;
 }
 
 void MemoryArena::reset() {
     for (auto& block : m_blocks) {
-        block.reset();
+        block.offset = 0;
     }
     m_currentBlockIndex = 0;
     m_usedBytes = 0;

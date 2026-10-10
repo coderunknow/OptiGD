@@ -2,54 +2,41 @@
 
 namespace optigd::optimization {
 
-MatrixCache& MatrixCache::instance() {
-    static MatrixCache s_instance;
-    return s_instance;
-}
-
 void MatrixCache::clear() {
     m_cache.clear();
     m_hits = 0;
     m_misses = 0;
 }
 
-void MatrixCache::markDirty(void* nodePtr) {
-    auto it = m_cache.find(nodePtr);
+void MatrixCache::markDirty(void* node) {
+    auto it = m_cache.find(node);
     if (it != m_cache.end()) {
-        it->second.dirtyGeneration++;
+        it->second.generation++;
+        it->second.valid = false;
     }
 }
 
-bool MatrixCache::getCached(void* nodePtr, float px, float py, float rot, float sx, float sy, AffineMatrix& outMatrix) {
-    auto it = m_cache.find(nodePtr);
-    if (it == m_cache.end()) {
+void MatrixCache::invalidate(void* node) {
+    m_cache.erase(node);
+}
+
+bool MatrixCache::getCached(void* node, const LocalTransformInputs& inputs, AffineMatrix& outMatrix) {
+    auto it = m_cache.find(node);
+    if (it == m_cache.end() || !it->second.valid || !(it->second.inputs == inputs)) {
         m_misses++;
         return false;
     }
-
-    const auto& item = it->second;
-    if (item.lastPosX == px && item.lastPosY == py &&
-        item.lastRot == rot &&
-        item.lastScaleX == sx && item.lastScaleY == sy) {
-        outMatrix = item.matrix;
-        m_hits++;
-        return true;
-    }
-
-    m_misses++;
-    return false;
+    outMatrix = it->second.matrix;
+    m_hits++;
+    return true;
 }
 
-void MatrixCache::store(void* nodePtr, float px, float py, float rot, float sx, float sy, const AffineMatrix& matrix) {
-    CachedTransform ct;
-    ct.matrix = matrix;
-    ct.lastPosX = px;
-    ct.lastPosY = py;
-    ct.lastRot = rot;
-    ct.lastScaleX = sx;
-    ct.lastScaleY = sy;
-    ct.dirtyGeneration = 0;
-    m_cache[nodePtr] = ct;
+void MatrixCache::store(void* node, const LocalTransformInputs& inputs, const AffineMatrix& matrix) {
+    Entry& entry = m_cache[node];
+    entry.inputs = inputs;
+    entry.matrix = matrix;
+    entry.valid = true;
+    // generation is kept so that generation numbers only increase for a given node.
 }
 
 } // namespace optigd::optimization

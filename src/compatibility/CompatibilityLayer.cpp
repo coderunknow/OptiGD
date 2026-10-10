@@ -12,12 +12,14 @@ void CompatibilityLayer::initialize(std::string_view gdVersion, std::string_view
     m_gdVersion = std::string(gdVersion);
     m_geodeVersion = std::string(geodeVersion);
 
-    registerFeature("spatial_culling", "2D Spatial Hash Frustum Culling");
-    registerFeature("particle_governor", "Particle Emitter Sleep & Density Scaling");
-    registerFeature("trigger_indexer", "Spatial & Temporal Trigger Dispatch");
-    registerFeature("matrix_cache", "CCNode Transform Matrix Cache");
-    registerFeature("adaptive_governor", "Dynamic Frame-Time Adaptation");
-    registerFeature("memory_arena", "Per-Frame Bump Allocation");
+    // Descriptions state what is connected in this release. "Available" means the feature
+    // may be used if its config flag is on; it does not mean the feature is connected.
+    registerFeature("spatial_culling", "Spatial index and camera-rectangle shadow measurement (no gameplay effect)");
+    registerFeature("particle_governor", "Particle emitter sleep and density policy (not connected to particles in v0.1.0-beta1)");
+    registerFeature("trigger_indexer", "Trigger index model (not connected to gameplay in v0.1.0-beta1)");
+    registerFeature("matrix_cache", "Local transform cache (not connected in v0.1.0-beta1)");
+    registerFeature("adaptive_governor", "Effective tier selection from frame intervals");
+    registerFeature("memory_arena", "Per-frame bump allocator (diagnostic counters only)");
 
     OPTIGD_LOG_INFO(std::string("CompatibilityLayer initialized for GD ") +
                     m_gdVersion + ", Geode " + m_geodeVersion);

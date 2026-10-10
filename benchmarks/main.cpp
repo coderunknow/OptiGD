@@ -1,13 +1,10 @@
 #include "../src/benchmark/BenchmarkSuite.hpp"
+
 #include <iostream>
 
-int main(int argc, char* argv[]) {
-    size_t objects = 50000;
-    size_t frames = 300;
-
-    std::cout << "Starting OptiGD Synthetic Benchmark Suite...\n";
-    auto result = optigd::benchmark::BenchmarkSuite::runAllBenchmarks(objects, frames);
-
-    std::cout << "Benchmark run completed successfully.\n";
+int main() {
+    std::cout << "OptiGD synthetic microbenchmarks [SYNTHETIC]. Not gameplay measurements.\n";
+    const auto results = optigd::benchmark::runMicrobenchmarks(50000, 300);
+    std::cout << optigd::benchmark::formatReport(results);
     return 0;
 }

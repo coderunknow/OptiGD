@@ -2,20 +2,18 @@
 	"geode": "5.10.1",
 	"gd": {
 		"win": "*",
-		"android": "*",
-		"mac": "*",
-		"ios": "*"
+		"android": "*"
 	},
 	"id": "coderunknow.optigd",
 	"name": "OptiGD",
-	"version": "v1.0.0",
+	"version": "v0.1.0-beta.1",
 	"developer": "coderunknow",
-	"description": "High-performance optimization engine and frame-time stabilization mod for Geometry Dash 2.2.",
+	"description": "Experimental performance-measurement and tuning mod for Geometry Dash 2.2081. Most optimizations are off by default; see the changelog for what is connected in this beta.",
 	"repository": "https://github.com/coderunknow/OptiGD",
 	"settings": {
 		"tier-preset": {
 			"name": "Performance Profile",
-			"description": "Select optimization profile. Default is High Performance (aggressive culling for low-spec/heavy levels).",
+			"description": "Effective tuning profile. LowEnd is the most aggressive; HighEnd the least; Custom uses the values from the tuning settings. The adaptive governor may move between presets when enabled.",
 			"type": "string",
 			"default": "LowEnd",
 			"one-of": [
@@ -26,28 +24,66 @@
 			]
 		},
 		"enable-culling": {
-			"name": "Spatial Frustum Culling",
-			"description": "Culls offscreen level objects using 2D spatial hash to eliminate redundant CPU/GPU updates.",
+			"name": "Spatial Culling Measurement",
+			"description": "Measures how many objects a spatial index would cull. Does not hide or skip any object in v0.1.0-beta.1.",
 			"type": "bool",
-			"default": true
+			"default": false
 		},
 		"enable-particle-limits": {
-			"name": "Particle Throttling & Sleep",
-			"description": "Sleeps offscreen particle emitters and scales cosmetic particle density under load.",
+			"name": "Particle Throttling (not connected)",
+			"description": "Reserved. Not connected to particle systems in v0.1.0-beta.1; has no gameplay effect.",
 			"type": "bool",
-			"default": true
+			"default": false
 		},
 		"enable-adaptive": {
-			"name": "Adaptive Dynamic Governor",
-			"description": "Monitors real-time frame budget and prevents micro-stutters by automatically adjusting fidelity.",
+			"name": "Adaptive Governor",
+			"description": "Chooses the effective profile from measured frame intervals. Changes only OptiGD's own effective tuning; never edits your settings.",
 			"type": "bool",
 			"default": true
 		},
 		"show-diagnostics": {
-			"name": "Diagnostics HUD",
-			"description": "Displays live frame-rate, frame-time variance, and culling efficiency statistics.",
+			"name": "Diagnostics Label",
+			"description": "Shows frame-interval statistics and shadow-culling counts in the log and the diagnostics summary.",
 			"type": "bool",
 			"default": false
+		},
+		"record-frametimes": {
+			"name": "Record Frame Times (CSV)",
+			"description": "Writes per-frame timings to a CSV file in the mod save directory for offline analysis. Off by default.",
+			"type": "bool",
+			"default": false
+		},
+		"custom-particle-density": {
+			"name": "Custom: Particle Density",
+			"description": "Used only with the Custom profile. Scale for cosmetic particle emission (0.05 to 1.0).",
+			"type": "float",
+			"default": 0.5,
+			"min": 0.05,
+			"max": 1.0
+		},
+		"custom-max-particles": {
+			"name": "Custom: Max Active Particles",
+			"description": "Used only with the Custom profile. Global particle budget (128 to 16384).",
+			"type": "int",
+			"default": 2048,
+			"min": 128,
+			"max": 16384
+		},
+		"custom-padding-x": {
+			"name": "Custom: Camera Padding X",
+			"description": "Used only with the Custom profile. Horizontal padding in pixels added to the camera rectangle (0 to 600).",
+			"type": "int",
+			"default": 120,
+			"min": 0,
+			"max": 600
+		},
+		"custom-padding-y": {
+			"name": "Custom: Camera Padding Y",
+			"description": "Used only with the Custom profile. Vertical padding in pixels added to the camera rectangle (0 to 600).",
+			"type": "int",
+			"default": 80,
+			"min": 0,
+			"max": 600
 		}
 	}
 }
