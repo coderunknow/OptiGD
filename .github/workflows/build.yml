@@ -33,9 +33,12 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure --verbose
 
       - name: Run Performance Benchmark Suite
+        shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ -f "./build/Release/optigd_benchmark.exe" ]; then
             ./build/Release/optigd_benchmark.exe benchmark_results.json
+          elif [ -f "./build/optigd_benchmark.exe" ]; then
+            ./build/optigd_benchmark.exe benchmark_results.json
           else
             ./build/optigd_benchmark benchmark_results.json
           fi
