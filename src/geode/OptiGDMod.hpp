@@ -1,15 +1,16 @@
 #pragma once
 
-#ifdef GEODE_MOD_ID
+// This header bridges the standalone OptiGD C++20 engine with the Geode SDK
+// when compiled inside a Geode Mod environment.
 
-#include <Geode/Geode.hpp>
 #include "../core/OptiGDManager.hpp"
+#include "../config/ConfigManager.hpp"
+#include "../diagnostics/DiagnosticsEngine.hpp"
+#include "../ui/DiagnosticsOverlay.hpp"
 
-namespace optigd::geode_mod {
+namespace optigd::geode_integration {
 
-void initializeMod();
+void onModLoaded();
 void syncSettingsWithConfig();
 
-} // namespace optigd::geode_mod
-
-#endif // GEODE_MOD_ID
+} // namespace optigd::geode_integration

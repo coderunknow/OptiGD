@@ -1,102 +1,29 @@
-# Hướng dẫn: Workflow tự động tạo GitHub Release (`release.yml`)
+# OptiGD `v0.1.0-beta1` CI/CD & Release Workflow
 
-File workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+## 1. Continuous Integration (`.github/workflows/build.yml`)
 
-## 1. Workflow này làm gì?
+Every push and pull request runs a three-stage verification pipeline:
 
-Mỗi khi bạn push một tag có dạng `v*` (vd: `v1.0.0`, `v1.2.2`, `v1.1.0-rc1`), GitHub Actions sẽ:
+1. **`standalone-test-and-benchmark` (`ubuntu-latest`, `windows-latest`)**:
+   - Compiles `optigd_core`, `optigd_tests`, and `optigd_benchmark` in `Release` mode (`-DOPTIGD_STANDALONE_ONLY=ON`).
+   - Runs `ctest --output-on-failure --verbose` (9 test suites covering all core and optimization modules).
+   - Executes `optigd_benchmark` and validates `benchmark_results.json` metadata (`optigd_version == "0.1.0-beta1"`, `evidence_classification == "[SIMULATED]"`).
 
-| Bước | Job | Nội dung |
-| :--- | :--- | :--- |
-| 1 | `check-version` | Kiểm tra tag và `version` trong `mod.json`. Lệch → **chỉ cảnh báo**, không làm fail workflow. Tag không hợp lệ hoặc `mod.json` hỏng → fail rõ ràng để không phát hành nhầm. |
-| 2 | `build` | Build đúng một file `.geode` cho từng target **Win64, Android32, Android64** và upload thành artifact riêng. |
-| 3 | `release` | Tải đủ ba artifact, kiểm tra không thiếu/thừa file, đổi tên theo target rồi tạo GitHub Release bằng `softprops/action-gh-release@v2`. |
+2. **`build-geode-mod` (`Win64`, `Android64`, `Android32`)**:
+   - Uses `geode-sdk/build-geode-mod@main` with `sdk: given` (which reads `"geode": "5.10.1"` from `mod.json` and installs the matching target binaries).
+   - Verifies each built `.geode` archive with `unzip -l` and `jq`, failing the job if the platform binary (`coderunknow.optigd.dll`, `coderunknow.optigd.android64.so`, or `coderunknow.optigd.android32.so`) or `mod.json` (`"version": "v0.1.0-beta1"`) is missing.
 
-Release tạo ra có:
+3. **`combine`**:
+   - Merges the platform `.geode` packages via `geode-sdk/build-geode-mod/combine@main`.
+   - Verifies that the combined `coderunknow.optigd.geode` archive contains **all three** platform binaries (`.dll`, `.android64.so`, `.android32.so`) and `mod.json` (`v0.1.0-beta1`).
+   - Uploads the verified multi-platform `coderunknow.optigd.geode` artifact.
 
-- **Tiêu đề** = tên tag (vd: `v1.2.2`).
-- **Release Notes** tự sinh từ commits (`generate_release_notes: true`) **cộng thêm** section tương ứng trong `CHANGELOG.md` nếu section đó tồn tại.
-- **Assets chính xác gồm ba file**:
-  - `coderunknow.optigd-Win64.geode`
-  - `coderunknow.optigd-Android32.geode`
-  - `coderunknow.optigd-Android64.geode`
-- Tag chứa `-alpha`, `-beta` hoặc `-rc` theo dạng hợp lệ (vd: `v1.1.0-rc1`) → tự đánh dấu **Prerelease**.
-- `draft: false` → publish ngay, không cần bấm tay.
+---
 
-`release.yml` không dùng `combine: true`: tùy chọn đó tạo một package đa nền tảng duy nhất, trong khi Release này cần ba asset riêng theo target.
+## 2. Tagged Release Workflow (`.github/workflows/release.yml`)
 
-## 2. Cách cài đặt vào repository
-
-1. Merge file `.github/workflows/release.yml` vào nhánh `main` trước khi push tag (workflow tag phải tồn tại trên nhánh mặc định).
-2. Kiểm tra quyền Actions (chỉ cần làm 1 lần):
-   - Vào **Settings → Actions → General → Workflow permissions**.
-   - Chọn **Read and write permissions**, hoặc bảo đảm policy của organization không ghi đè quyền `contents: write` đã khai báo trong job `release`.
-   - **Allow GitHub Actions to create and approve pull requests** không cần bật; workflow không tạo PR.
-
-## 3. Cách test thử
-
-### Bước 1 — Test an toàn với tag thử nghiệm
-
-Chạy sau khi workflow mới đã được merge vào `main`:
-
-```bash
-git checkout main
-git pull
-git tag -a v0.0.1-test.2 -m "E2E test release workflow"
-git push origin v0.0.1-test.2
-```
-
-Tag test này cố ý lệch với `mod.json` (`1.0.0`), nên mismatch là cảnh báo chứ không làm fail build.
-
-### Bước 2 — Quan sát
-
-- Tab **Actions** → workflow **Release** chạy `check-version`, ba job `build` và `release`.
-- Job `check-version` phải hiển thị cảnh báo, nhưng vẫn thành công:
-
-  ```text
-  Tag 0.0.1-test.2 != mod.json version 1.0.0
-  ```
-
-- Tab **Releases** → Release `v0.0.1-test.2` xuất hiện.
-- Body phải có dòng cảnh báo với đầy đủ giá trị:
-
-  ```text
-  tag `0.0.1-test.2` không khớp version trong `mod.json` (`1.0.0`)
-  ```
-
-- Assets phải có đủ và chỉ có ba file `.geode` theo đúng tên target ở trên.
-
-### Bước 3 — Dọn dẹp tag test và Release
-
-```bash
-gh release delete v0.0.1-test.2 --yes
-git push origin :refs/tags/v0.0.1-test.2
-git tag -d v0.0.1-test.2
-```
-
-Kiểm tra lại:
-
-```bash
-gh release list
-git ls-remote --tags origin
-```
-
-### Bước 4 — Release thật
-
-```bash
-# 1. Cập nhật version trong mod.json + CHANGELOG.md, commit vào main
-# 2. Tạo tag đúng version và push
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
-```
-
-## 4. Xử lý sự cố nhanh
-
-| Triệu chứng | Nguyên nhân / cách sửa |
-| :--- | :--- |
-| Workflow không chạy khi push tag | Kiểm tra tag đã tồn tại trên remote bằng `git ls-remote --tags origin`, tag phải bắt đầu bằng chữ thường `v`, và workflow phải có trên `main` trước khi push tag. |
-| Lỗi tag không hợp lệ | `release.yml` chấp nhận dạng SemVer như `v1.0.0` hoặc `v1.1.0-rc1`; tag sai sẽ fail ở `check-version` thay vì tạo Release mơ hồ. |
-| Cảnh báo mismatch làm job fail | Đây không phải hành vi mong muốn. Mismatch hợp lệ chỉ tạo annotation và Release vẫn tiếp tục; chỉ lỗi metadata/tag format mới làm fail. |
-| Thiếu hoặc thừa file `.geode` | Mỗi matrix job phải tạo đúng một file. Các bước verify và collect sẽ fail rõ ràng nếu có 0 hoặc nhiều hơn 1 file cho bất kỳ target nào. |
-| Lỗi `403` / `Resource not accessible by integration` ở job release | Vào **Settings → Actions → General → Workflow permissions**, chọn **Read and write permissions** và kiểm tra policy organization/repository có ghi đè không. |
-| Muốn release lại tag đã tồn tại | Xóa Release/tag cũ rồi push lại, hoặc dùng một tag mới. |
+When a version tag (`v*`, such as `v0.1.0-beta1`) is pushed after human approval:
+1. Runs the pre-release unit test and benchmark gate.
+2. Builds and verifies the `Win64`, `Android64`, and `Android32` `.geode` packages.
+3. Combines and verifies the multi-platform `coderunknow.optigd.geode` package.
+4. Automatically detects pre-release tags containing `-` (e.g., `-beta1`, `-rc1`) and sets `prerelease: true` on the GitHub Release.

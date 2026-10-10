@@ -8,13 +8,16 @@
 namespace optigd::adaptive {
 
 AdaptiveGovernor::AdaptiveGovernor(const core::OptiConfig& initialConfig)
-    : m_targetFps(initialConfig.targetFrameRate),
-      m_targetFrameBudgetMs(initialConfig.targetFrameTimeMs),
+    : m_targetFps(initialConfig.targetFrameRate > 0.0f ? initialConfig.targetFrameRate : 60.0f),
+      m_targetFrameBudgetMs(1000.0 / static_cast<double>(m_targetFps)),
       m_currentTier(initialConfig.tier),
-      m_hysteresisCooldown(initialConfig.fallbackCooldownFrames) {}
+      m_dynamicEnabled(initialConfig.flags.enableAdaptiveGovernor),
+      m_hysteresisCooldown(initialConfig.fallbackCooldownFrames) {
+    m_scratchSortBuffer.reserve(m_windowSize);
+}
 
 void AdaptiveGovernor::setTargetFrameRate(float fps) {
-    if (fps <= 0.0f) fps = 60.0f;
+    if (fps <= 0.0f || !std::isfinite(fps)) fps = 60.0f;
     m_targetFps = fps;
     m_targetFrameBudgetMs = 1000.0 / static_cast<double>(fps);
 }
@@ -25,7 +28,16 @@ void AdaptiveGovernor::forceTier(core::PerformanceTier tier) {
     OPTIGD_LOG_INFO(std::string("Manually set performance tier to: ") + core::tierToString(tier));
 }
 
+void AdaptiveGovernor::clearHistory() {
+    m_frameTimesMs.clear();
+    m_cooldownRemaining = 0;
+    m_stats = WindowStats{};
+}
+
 void AdaptiveGovernor::recordFrameTime(double frameTimeUs) {
+    if (!std::isfinite(frameTimeUs) || frameTimeUs <= 0.0) {
+        return;
+    }
     double frameTimeMs = frameTimeUs / 1000.0;
     m_frameTimesMs.push_back(frameTimeMs);
     if (m_frameTimesMs.size() > m_windowSize) {
@@ -34,7 +46,7 @@ void AdaptiveGovernor::recordFrameTime(double frameTimeUs) {
     m_totalFrames++;
 }
 
-void AdaptiveGovernor::calculateWindowStats() {
+void AdaptiveGovernor::calculateWindowStats(core::MemoryArena* arena) {
     if (m_frameTimesMs.empty()) return;
 
     size_t n = m_frameTimesMs.size();
@@ -56,23 +68,48 @@ void AdaptiveGovernor::calculateWindowStats() {
     m_stats.varianceMs = sqDiffSum / static_cast<double>(n);
     m_stats.stdDevMs = std::sqrt(m_stats.varianceMs);
 
-    // Compute P95 and P99 percentiles
-    std::vector<double> sortedTimes(m_frameTimesMs.begin(), m_frameTimesMs.end());
-    std::sort(sortedTimes.begin(), sortedTimes.end());
+    // Use MemoryArena scratch buffer when provided to avoid per-frame heap allocation
+    double* sortedPtr = nullptr;
+    if (arena != nullptr) {
+        sortedPtr = arena->allocateArray<double>(n);
+    }
+    if (sortedPtr != nullptr) {
+        size_t idx = 0;
+        for (double val : m_frameTimesMs) {
+            sortedPtr[idx++] = val;
+        }
+        std::sort(sortedPtr, sortedPtr + n);
+    } else {
+        m_scratchSortBuffer.assign(m_frameTimesMs.begin(), m_frameTimesMs.end());
+        std::sort(m_scratchSortBuffer.begin(), m_scratchSortBuffer.end());
+        sortedPtr = m_scratchSortBuffer.data();
+    }
 
+    size_t idx50 = n / 2;
     size_t idx95 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.95));
     size_t idx99 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.99));
     if (idx95 >= n) idx95 = n - 1;
     if (idx99 >= n) idx99 = n - 1;
 
-    m_stats.p95Ms = sortedTimes[idx95];
-    m_stats.p99Ms = sortedTimes[idx99];
+    m_stats.medianMs = (n % 2 == 0 && n >= 2)
+                           ? 0.5 * (sortedPtr[idx50 - 1] + sortedPtr[idx50])
+                           : sortedPtr[idx50];
+    m_stats.p95Ms = sortedPtr[idx95];
+    m_stats.p99Ms = sortedPtr[idx99];
 }
 
-void AdaptiveGovernor::update(core::OptiConfig& currentConfig) {
+void AdaptiveGovernor::update(core::OptiConfig& currentConfig, core::MemoryArena* arena) {
     auto startTime = std::chrono::steady_clock::now();
 
-    calculateWindowStats();
+    if (currentConfig.targetFrameRate > 0.0f && currentConfig.targetFrameRate != m_targetFps) {
+        setTargetFrameRate(currentConfig.targetFrameRate);
+    }
+    m_dynamicEnabled = currentConfig.flags.enableAdaptiveGovernor;
+    if (currentConfig.tier == core::PerformanceTier::Custom) {
+        m_currentTier = core::PerformanceTier::Custom;
+    }
+
+    calculateWindowStats(arena);
 
     if (m_cooldownRemaining > 0) {
         m_cooldownRemaining--;
@@ -85,7 +122,9 @@ void AdaptiveGovernor::update(core::OptiConfig& currentConfig) {
 }
 
 void AdaptiveGovernor::evaluateTierAdjustment(core::OptiConfig& config) {
-    if (m_currentTier == core::PerformanceTier::Custom) {
+    if (m_currentTier == core::PerformanceTier::Custom ||
+        config.tier == core::PerformanceTier::Custom) {
+        m_currentTier = core::PerformanceTier::Custom;
         return; // Custom mode does not auto-scale
     }
 

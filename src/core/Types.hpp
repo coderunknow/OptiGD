@@ -1,11 +1,17 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <cmath>
 #include <algorithm>
 
 namespace optigd::core {
+
+inline constexpr const char* kOptiGDVersion = "0.1.0-beta1";
+inline constexpr const char* kOptiGDVersionTag = "v0.1.0-beta1";
+inline constexpr const char* kTargetGDVersion = "2.2081";
+inline constexpr const char* kTargetGeodeVersion = "v5.10.1";
 
 struct Point2D {
     float x{0.0f};
@@ -36,10 +42,34 @@ struct Rect2D {
     constexpr Rect2D(float x, float y, float w, float h) : origin(x, y), size(w, h) {}
     constexpr Rect2D(const Point2D& orig, const Size2D& sz) : origin(orig), size(sz) {}
 
-    constexpr float minX() const { return origin.x; }
-    constexpr float maxX() const { return origin.x + size.width; }
-    constexpr float minY() const { return origin.y; }
-    constexpr float maxY() const { return origin.y + size.height; }
+    constexpr float minX() const {
+        return size.width >= 0.0f ? origin.x : (origin.x + size.width);
+    }
+    constexpr float maxX() const {
+        return size.width >= 0.0f ? (origin.x + size.width) : origin.x;
+    }
+    constexpr float minY() const {
+        return size.height >= 0.0f ? origin.y : (origin.y + size.height);
+    }
+    constexpr float maxY() const {
+        return size.height >= 0.0f ? (origin.y + size.height) : origin.y;
+    }
+
+    Rect2D normalized() const {
+        float ox = std::isfinite(origin.x) ? origin.x : 0.0f;
+        float oy = std::isfinite(origin.y) ? origin.y : 0.0f;
+        float w = std::isfinite(size.width) ? size.width : 0.0f;
+        float h = std::isfinite(size.height) ? size.height : 0.0f;
+        if (w < 0.0f) {
+            ox += w;
+            w = -w;
+        }
+        if (h < 0.0f) {
+            oy += h;
+            h = -h;
+        }
+        return Rect2D(ox, oy, w, h);
+    }
 
     constexpr bool intersects(const Rect2D& o) const {
         return !(maxX() < o.minX() || minX() > o.maxX() ||
@@ -52,8 +82,9 @@ struct Rect2D {
     }
 
     constexpr Rect2D expanded(float padX, float padY) const {
-        return Rect2D(origin.x - padX, origin.y - padY,
-                      size.width + padX * 2.0f, size.height + padY * 2.0f);
+        return Rect2D(minX() - padX, minY() - padY,
+                      (maxX() - minX()) + padX * 2.0f,
+                      (maxY() - minY()) + padY * 2.0f);
     }
 };
 
@@ -77,11 +108,12 @@ inline const char* tierToString(PerformanceTier tier) {
 struct OptimizationFlags {
     bool enableSpatialCulling{true};
     bool enableParticleThrottling{true};
-    bool enableTriggerIndexing{true};
+    bool enableTriggerIndexing{false};
     bool enableMatrixCaching{true};
     bool enableAdaptiveGovernor{true};
     bool enableMemoryArena{true};
     bool enableDiagnosticsOverlay{false};
+    bool exportDiagnosticsOnExit{true};
 };
 
 struct OptiConfig {
@@ -90,8 +122,8 @@ struct OptiConfig {
 
     // Spatial hash parameters
     float spatialCellSize{128.0f};
-    float cameraPaddingX{150.0f};
-    float cameraPaddingY{100.0f};
+    float cameraPaddingX{120.0f};
+    float cameraPaddingY{80.0f};
 
     // Particle throttling parameters
     float particleDensityScale{0.5f}; // 50% max density in LowEnd mode
@@ -116,22 +148,40 @@ struct OptiConfig {
 struct FrameStats {
     uint64_t frameIndex{0};
     double totalFrameTimeUs{0.0};
+    double updateCpuTimeUs{0.0};
+    double optigdOverheadUs{0.0};
     double cullingTimeUs{0.0};
     double particleTimeUs{0.0};
     double triggerTimeUs{0.0};
     double matrixTimeUs{0.0};
+    double governorTimeUs{0.0};
     double governorOverheadUs{0.0};
 
     uint32_t totalObjects{0};
     uint32_t visibleObjects{0};
     uint32_t culledObjects{0};
+    uint32_t newlyVisibleObjects{0};
+    uint32_t newlyCulledObjects{0};
+
+    uint32_t activeParticles{0};
     uint32_t totalParticles{0};
     uint32_t culledParticles{0};
+    uint32_t activeEmitters{0};
+    uint32_t sleepingEmitters{0};
+
     uint32_t totalTriggers{0};
     uint32_t evaluatedTriggers{0};
+    uint32_t executedTriggers{0};
 
+    uint64_t matrixCacheHits{0};
+    uint64_t matrixCacheMisses{0};
+
+    size_t arenaUsedBytes{0};
+    size_t arenaPeakBytes{0};
+    uint32_t arenaAllocations{0};
     size_t arenaAllocatedBytes{0};
-    size_t heapAllocationsAvoided{0};
+    size_t arenaAllocationCount{0};
+    uint32_t heapAllocationsAvoided{0};
 };
 
 } // namespace optigd::core

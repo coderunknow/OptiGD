@@ -2,7 +2,9 @@
 
 #include "../core/Types.hpp"
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
+#include <cstddef>
 
 namespace optigd::optimization {
 
@@ -14,12 +16,28 @@ enum class ParticlePriority : uint8_t {
 
 struct ParticleEmitterInfo {
     uint32_t id{0};
+    void* nativePtr{nullptr};
     core::Point2D position{};
     float emitterRadius{64.0f};
     ParticlePriority priority{ParticlePriority::Cosmetic};
+    float baseEmissionRate{30.0f};
+    float duration{-1.0f};
+    bool autoRemoveOnFinish{false};
     uint32_t activeParticleCount{0};
     uint32_t maxAllowedParticles{500};
     bool isSleeping{false};
+    bool justEnteredSleep{false};
+    bool justWokeFromSleep{false};
+    bool active{true};
+};
+
+struct EmitterEvaluationResult {
+    bool shouldUpdate{true};
+    float emissionMultiplier{1.0f};
+    float effectiveEmissionRate{30.0f};
+    float clampedDt{0.016667f};
+    bool justEnteredSleep{false};
+    bool justWokeFromSleep{false};
 };
 
 class ParticleGovernor {
@@ -36,16 +54,34 @@ public:
     bool isCullOffscreen() const { return m_cullOffscreen; }
 
     void clear();
-    uint32_t registerEmitter(uint32_t id, const core::Point2D& pos, float radius, ParticlePriority prio);
+
+    uint32_t registerEmitter(uint32_t id, const core::Point2D& pos, float radius,
+                             ParticlePriority prio, void* nativePtr = nullptr,
+                             float baseEmissionRate = 30.0f, float duration = -1.0f,
+                             bool autoRemoveOnFinish = false);
+
+    uint32_t registerOrUpdateByPtr(void* nativePtr, const core::Point2D& pos, float radius,
+                                   ParticlePriority prio, float baseEmissionRate,
+                                   float duration, bool autoRemoveOnFinish);
+
+    bool updateEmitterPosition(uint32_t id, const core::Point2D& pos);
+    bool unregisterEmitter(uint32_t id);
+    bool unregisterEmitterByPtr(void* nativePtr);
 
     // Determines if an emitter should update & render, and gives scaled emission rate
     bool evaluateEmitter(uint32_t id, const core::Rect2D& cameraRect, float& outEmissionMultiplier);
 
+    // Detailed evaluation including sleep/wake state transitions and non-compounding rate
+    EmitterEvaluationResult evaluateEmitterDetailed(uint32_t id, const core::Rect2D& cameraRect, float rawDt);
+
     void recordActiveParticles(uint32_t emitterId, uint32_t count);
 
-    size_t getTrackedEmitterCount() const { return m_emitters.size(); }
+    size_t getTrackedEmitterCount() const { return m_activeEmitterCount; }
     uint32_t getTotalActiveParticles() const { return m_currentTotalParticles; }
     uint32_t getLastCulledEmitterCount() const { return m_lastCulledEmitters; }
+    uint32_t getLastAvoidedParticleCount() const { return m_lastAvoidedParticles; }
+
+    const ParticleEmitterInfo* getEmitterInfo(uint32_t id) const;
 
 private:
     float m_densityScale{0.5f};
@@ -53,8 +89,15 @@ private:
     bool m_cullOffscreen{true};
 
     std::vector<ParticleEmitterInfo> m_emitters;
+    std::unordered_map<uint32_t, uint32_t> m_idToIndex;
+    std::unordered_map<void*, uint32_t> m_ptrToIndex;
+
+    size_t m_activeEmitterCount{0};
     uint32_t m_currentTotalParticles{0};
     uint32_t m_lastCulledEmitters{0};
+    uint32_t m_lastAvoidedParticles{0};
+
+    void recalculateParticleTotals();
 };
 
 } // namespace optigd::optimization

@@ -1,13 +1,28 @@
 #include "../src/benchmark/BenchmarkSuite.hpp"
+#include "../src/core/Types.hpp"
 #include <iostream>
+#include <fstream>
+#include <string>
 
-int main(int argc, char* argv[]) {
-    size_t objects = 50000;
-    size_t frames = 300;
+int main(int argc, char** argv) {
+    std::cout << "==========================================================\n";
+    std::cout << "  OptiGD v" << optigd::core::kOptiGDVersion << " Synthetic Benchmark Suite [SIMULATED]\n";
+    std::cout << "==========================================================\n\n";
 
-    std::cout << "Starting OptiGD Synthetic Benchmark Suite...\n";
-    auto result = optigd::benchmark::BenchmarkSuite::runAllBenchmarks(objects, frames);
+    auto results = optigd::benchmark::BenchmarkSuite::runAllBenchmarks();
+    std::string mdReport = optigd::benchmark::BenchmarkSuite::formatMarkdownReport(results);
+    std::cout << mdReport << "\n";
 
-    std::cout << "Benchmark run completed successfully.\n";
+    std::string jsonPath = "benchmark_results.json";
+    if (argc > 1) {
+        jsonPath = argv[1];
+    }
+
+    std::ofstream ofs(jsonPath);
+    if (ofs.is_open()) {
+        ofs << optigd::benchmark::BenchmarkSuite::formatJsonReport(results);
+        std::cout << "Exported structured JSON benchmark results to: " << jsonPath << "\n";
+    }
+
     return 0;
 }

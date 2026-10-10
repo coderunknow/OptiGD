@@ -1,10 +1,10 @@
 #pragma once
 
+#include "../core/Types.hpp"
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-#include <functional>
 #include <cstdint>
 #include <cstddef>
 
@@ -28,10 +28,12 @@ class CompatibilityLayer {
 public:
     static CompatibilityLayer& instance();
 
-    void initialize(std::string_view gdVersion, std::string_view geodeVersion);
+    void initialize(std::string_view gdVersion = core::kTargetGDVersion,
+                    std::string_view geodeVersion = core::kTargetGeodeVersion);
 
     std::string_view getGDVersion() const { return m_gdVersion; }
     std::string_view getGeodeVersion() const { return m_geodeVersion; }
+    bool isEnvironmentCompatible() const { return m_environmentCompatible; }
 
     void registerFeature(std::string_view featureName, std::string_view description);
     void reportConflict(std::string_view featureName, std::string_view reason);
@@ -42,10 +44,13 @@ public:
 
     std::vector<ModFeatureInfo> getAllFeatures() const;
 
+    static int parseMajorVersion(std::string_view ver);
+
 private:
     CompatibilityLayer() = default;
-    std::string m_gdVersion{"2.2081"};
-    std::string m_geodeVersion{"v4.0.0"};
+    std::string m_gdVersion{core::kTargetGDVersion};
+    std::string m_geodeVersion{core::kTargetGeodeVersion};
+    bool m_environmentCompatible{true};
     std::unordered_map<std::string, ModFeatureInfo> m_features;
 };
 

@@ -1,14 +1,17 @@
 #pragma once
 
 #include "../core/Types.hpp"
+#include "../core/MemoryArena.hpp"
 #include <deque>
 #include <vector>
 #include <cstdint>
+#include <cstddef>
 
 namespace optigd::adaptive {
 
 struct WindowStats {
     double meanMs{0.0};
+    double medianMs{0.0};
     double minMs{0.0};
     double maxMs{0.0};
     double varianceMs{0.0};
@@ -29,7 +32,9 @@ public:
     uint32_t getHysteresisFrames() const { return m_hysteresisCooldown; }
 
     void recordFrameTime(double frameTimeUs);
-    void update(core::OptiConfig& currentConfig);
+    void update(core::OptiConfig& currentConfig, core::MemoryArena* arena = nullptr);
+
+    void clearHistory();
 
     const WindowStats& getRecentStats() const { return m_stats; }
     core::PerformanceTier getCurrentTier() const { return m_currentTier; }
@@ -49,6 +54,7 @@ private:
     bool m_dynamicEnabled{true};
 
     std::deque<double> m_frameTimesMs;
+    std::vector<double> m_scratchSortBuffer;
     size_t m_windowSize{120}; // 2 seconds at 60fps
 
     uint32_t m_cooldownRemaining{0};
@@ -59,7 +65,7 @@ private:
     WindowStats m_stats{};
     double m_lastOverheadUs{0.0};
 
-    void calculateWindowStats();
+    void calculateWindowStats(core::MemoryArena* arena);
     void evaluateTierAdjustment(core::OptiConfig& config);
 };
 

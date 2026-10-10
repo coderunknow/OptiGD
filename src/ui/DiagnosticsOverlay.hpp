@@ -2,9 +2,7 @@
 
 #include "../core/Types.hpp"
 #include "../adaptive/AdaptiveGovernor.hpp"
-#include "../diagnostics/DiagnosticsEngine.hpp"
 #include <string>
-#include <vector>
 
 namespace optigd::ui {
 
@@ -12,18 +10,17 @@ class DiagnosticsOverlay {
 public:
     static DiagnosticsOverlay& instance();
 
-    void setVisible(bool visible) { m_visible = visible; }
-    bool isVisible() const { return m_visible; }
+    void setEnabled(bool enabled) { m_enabled = enabled; }
+    bool isEnabled() const { return m_enabled; }
 
-    std::vector<std::string> formatOverlayLines(const adaptive::AdaptiveGovernor& governor,
-                                               const diagnostics::DiagnosticsSummary& summary) const;
-
-    std::string getSingleLineSummary(const adaptive::AdaptiveGovernor& governor,
-                                     const diagnostics::DiagnosticsSummary& summary) const;
+    // Formats HUD overlay text for rendering in Cocos2d-x CCLabelBMFont or console
+    std::string formatOverlayText(const core::FrameStats& latestFrame,
+                                  const adaptive::WindowStats& windowStats,
+                                  const core::OptiConfig& config) const;
 
 private:
     DiagnosticsOverlay() = default;
-    bool m_visible{false};
+    bool m_enabled{false};
 };
 
 } // namespace optigd::ui
