@@ -93,6 +93,23 @@ jobs:
           target: ${{ matrix.target }}
           build-config: Release
 
+      - name: Diagnose Geode Build Failure
+        if: failure()
+        shell: bash
+        run: |
+          export GEODE_SDK="${{ github.workspace }}/geode-sdk-clone"
+          export CPM_SOURCE_CACHE="${{ github.workspace }}/cpm-cache"
+          if [ ! -d "build" ]; then
+            echo "::error title=Stage::Failed before CMake configure (inside Setup CLI or Setup Geode SDK)"
+          else
+            OUT=$(cmake --build build --config Release 2>&1 | grep -E "error:|fatal error:|Error|FAILED|undefined" | head -n 20 | tr '\n\r' '  ')
+            if [ -z "$OUT" ]; then
+              OUT=$(cmake --build build --config Release 2>&1 | tail -n 25 | tr '\n\r' '  ')
+            fi
+            echo "::error title=CompilerOutput::$OUT"
+          fi
+          exit 1
+
       - name: Verify Platform .geode Package Contents
         shell: bash
         run: |
