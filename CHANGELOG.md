@@ -62,6 +62,6 @@ claimed; the gameplay benchmark is blocked (see `docs/GAMEPLAY_BENCHMARK_PROTOCO
 - CI verifies that each platform produces exactly one non-empty `.geode` file.
 
 ### Known limitations
-- Win64, Android32, and Android64 builds are **UNVERIFIED** until CI passes.
+- Win64, Android32, and Android64 builds are **BUILD-VERIFIED** by CI (compile and link). Runtime behaviour is **UNVERIFIED**.
 - Runtime behaviour in Geometry Dash is **UNVERIFIED**.
 - Object enumeration for shadow culling and the camera rectangle conversion are unverified against the game.

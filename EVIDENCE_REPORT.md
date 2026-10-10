@@ -45,8 +45,8 @@ artifact was not run in the game.
 | 13 | `config/ConfigManager`, `Presets`, `SettingsMapping` | VERIFIED | — | Settings read through Geode listeners (`syncSettings`) | 6 tests (round-trip, garbage input, presets, unknown tier warning, flag mapping and clamps, default flags) | Settings UI behaviour in-game UNVERIFIED |
 | 14 | `compatibility/CompatibilityLayer` | PARTIAL | — | Initialised with real GD/Geode version constants; **no automatic conflict detection** (only manual `reportConflict`) | 1 test (versions passed through, conflict disables feature) | Conflict detection against other mods (not implemented) |
 | 15 | `platform/Platform` | PARTIAL | — | Used for timing and system info | Compiled and used natively (Linux). Windows and Android code paths compiled by CI only | Device run |
-| 16 | `geode/Hooks.cpp` — `PlayLayer::init/resetLevel/onQuit/postUpdate`, `MenuLayer::init`, settings listeners | UNVERIFIED | — | Written against bindings `GeometryDash.bro` (PlayLayer `[[link(android)]]`, win/imac/m1/ios addresses) | **None.** Not compiled in this environment (needs Geode SDK + bindings + Win/Android toolchains) | CI compile (build.yml), then in-game run |
-| 17 | Object enumeration `m_objects->count()/objectAtIndex()` in `registerShadowObjects` | UNVERIFIED | — | Used only when `enable-culling` is ON | None | Bindings comment these methods out for 2.2081; the first CI build decides |
+| 16 | `geode/Hooks.cpp` — `PlayLayer::init/resetLevel/onQuit/postUpdate`, `MenuLayer::init`, settings listeners | BUILD-VERIFIED (compile/link); runtime UNVERIFIED | — | Written against bindings `GeometryDash.bro` (PlayLayer `[[link(android)]]`, win/imac/m1/ios addresses) | CI: the mod target links on Win64 and Android32/64 (the `.geode` file exists only after linking, so `Hooks.cpp` compiled) | In-game run: hooks fire, level lifecycle, settings listeners |
+| 17 | Object enumeration `m_objects->count()/objectAtIndex()` in `registerShadowObjects` | BUILD-VERIFIED (compile/link); runtime UNVERIFIED | — | Used only when `enable-culling` is ON | CI compile succeeded on all three targets. The bindings file comments these methods out, so they come from the Geode/cocos headers. Semantics in-game are unverified. | In-game run with culling on |
 | 18 | Benchmark suite (`optigd_benchmark`) | VERIFIED (harness runs) / **SYNTHETIC** | — | Host-only; not gameplay | Runs on Linux host | Not evidence for any gameplay claim |
 | 19 | Frame-time analyzer `tools/analyze_frametimes.py` | VERIFIED (tool tests) | — | Offline | 12 tool tests on **synthetic CSV** | Real captures from the protocol |
 
@@ -64,7 +64,11 @@ Recorded in this sandbox (Debian 12, GCC 12.2, CMake 4.4.4, Ninja 1.13.2, 2 vCPU
 | Mutation check B: remove `TriggerOptimizer` re-arm on `prepareLevel` | `TriggerOptimizer re-arms on restart` FAILED (test caught it) |
 | Source restored after mutation checks | 39/39 passed again |
 | Tool tests (`python3 -m unittest discover -s tools/tests`) | 12/12 passed (**synthetic CSV, tool tests only**) |
-| Geode build (Win64, Android32, Android64) | **Not run in this environment.** Pending CI (`build.yml`). |
+| Geode build, Windows x64 (`build.yml`, run 38042140564 on this branch) | **BUILD-VERIFIED**: job green; `.geode` present and non-empty |
+| Geode build, Android 32-bit (same run) | **BUILD-VERIFIED**: job green |
+| Geode build, Android 64-bit (same run) | **BUILD-VERIFIED**: job green. Combined `.geode` packaging green |
+| Runtime in Geometry Dash, all targets | **RUNTIME-UNVERIFIED** |
+| Compiler warnings in CI | Not checked: CI job logs are not accessible from the sandbox. Re-check in the GitHub UI before merge. |
 
 ### Defects found before changes and their regression coverage
 
@@ -101,9 +105,7 @@ trigger; both assertions are kept.
    this environment. See `docs/GAMEPLAY_BENCHMARK_PROTOCOL.md`. Acceptance criterion
    *"OptiGD improves frame time in Geometry Dash"* is **unresolved**. No FPS or frame-time improvement
    is claimed anywhere in this release.
-2. **Compile of the Geode mod: UNVERIFIED** until `build.yml` passes for Windows x64, Android32, and
-   Android64. The first run may fail on the object-enumeration calls (row 17) because the bindings
-   comment those methods out.
+2. **Geode compile: BUILD-VERIFIED** on Windows x64, Android32, and Android64 by `build.yml` (run 38042140564). Runtime is still UNVERIFIED.
 3. **Camera rectangle** (`convertToNodeSpace` of window corners into the object layer) is an assumption
    until checked in-game.
 4. **Upstream policy:** the Geode repository's `AGENTS.md` states that AI-written mods are not accepted

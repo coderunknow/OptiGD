@@ -103,7 +103,7 @@ _(entries below are appended in order)_
 - **Progress (CI):** pins applied in `build.yml` and `release.yml`: `actions/*` and `softprops/action-gh-release` by SHA; `build-geode-mod` by SHA; `sdk: given` (reads `mod.json`); `cli: v3.9.0`; `bindings-ref` fixed. The build job verifies exactly one non-empty `.geode` per target. The test job labels the benchmark step SYNTHETIC. **Not yet run on GitHub for this branch.**
 - **Progress (docs):** `README`, `CHANGELOG`, `EVIDENCE_REPORT` (module table), `docs/ARCHITECTURE.md`, `docs/BENCHMARKS.md` (simulated tables removed), `docs/GAMEPLAY_BENCHMARK_PROTOCOL.md` (pre-registered, status BLOCKED), `docs/RELEASE_WORKFLOW.md` (`1.0.0` examples removed). `AGENT.md` now uses `[SYNTHETIC]`, matching the code. `tools/generate_report.py` reads the JSON keys written by `exportReportJson`.
 - **Blocked:** gameplay benchmark (no GD 2.2081 client, Geode runtime, or test device in this environment). No FPS claim is made.
-- **Not verified:** Geode-only files (`src/geode/Hooks.cpp`, `OptiGDMod.hpp`) are not compiled here. The `m_objects` `count()`/`objectAtIndex()` calls are UNVERIFIED against the bindings.
+- **CI (run 38042140564, this branch):** all jobs green: native tests, Windows x64, Android 32-bit, Android 64-bit, combined `.geode`. The mod target links, so `Hooks.cpp` (including the `m_objects` calls) compiled. Runtime behaviour in the game is still unverified. CI job logs are not readable from the sandbox; warnings were not checked.
 - **Branch decision:** the session is fixed to `arena/21ca20f2-optigd`. The planned `optigd/v0.1.0-beta1` branch is NOT created. The PR is opened from `arena/21ca20f2-optigd` into `main`.
 
 ---

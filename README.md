@@ -33,7 +33,7 @@ The adaptive governor changes only OptiGD's effective tuning; it never edits you
 ## Targets
 
 - Windows x64, Android32, Android64 `.geode` builds are produced by `.github/workflows/build.yml`.
-  **BUILD-VERIFIED** only when that job is green. Runtime behaviour is **RUNTIME-UNVERIFIED**.
+  Build status for this release: **BUILD-VERIFIED** (CI green on this branch). Runtime behaviour is **RUNTIME-UNVERIFIED**.
 - Geode SDK `5.10.1` (`mod.json`). Bindings for GD `2.2081`.
 
 ## Build and test (native, no Geode needed)
