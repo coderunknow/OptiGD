@@ -93,3 +93,25 @@ Before modifying any code, all 54 files on `main` (`7ecfdd1c106a0a8e1e4c83a75fa2
   - **Blocker**: This Linux build environment does not contain a runnable Geometry Dash `2.2081` client binary, Steam/Wine session, GPU display server, or Android device/emulator.
   - **Mitigation**: All in-game telemetry hooks (`DiagnosticsEngine` JSON export on level exit, passthrough baseline mode, and `tools/generate_report.py --compare`) are built into the `.geode` package, and the PR will be opened as a **Draft PR** explicitly documenting the blocked runtime benchmark acceptance criterion.
 
+---
+
+## Entry 3 — 2026-10-10: Multi-Platform CI Build & Geode Package Verification
+
+### 3.1 Cross-Platform Compilation & Fixes During CI Verification
+1. **Windows MSVC `<windows.h>` Macro & Standard Header Fixes (`2a1faab`, `1345485`)**:
+   - Defined `NOMINMAX` and `WIN32_LEAN_AND_MEAN` before `<windows.h>` in `src/platform/Platform.cpp` and `CMakeLists.txt`, and added explicit `<algorithm>` and `<limits>` includes for MSVC compatibility.
+   - Added `shell: bash` to the cross-platform benchmark step in `.github/workflows/build.yml` and `.github/workflows/release.yml`.
+2. **CMake Geode SDK Target Ordering & `Logger::setCallback` Bridge (`cd28537`, `a3e033e`)**:
+   - Ordered `add_library(${PROJECT_NAME} SHARED ...)` prior to `add_subdirectory($ENV{GEODE_SDK} ...)` and `setup_geode_mod(${PROJECT_NAME})` in `CMakeLists.txt` to match Geode SDK's CMake contract (`BUILD_SHARED_LIBS OFF`).
+   - Added `Logger::setCallback()` in `src/core/Logger.hpp/.cpp` and handled `LogLevel::None` in `src/geode/Hooks.cpp` so internal OptiGD logs forward cleanly to `geode::log` with zero `-Wswitch` warnings.
+
+### 3.2 Verified GitHub Actions Run (`38045635961`)
+All 6 jobs in workflow `Build & Verify OptiGD` passed on commit `a3e033e`:
+- `Core Engine Tests & Benchmarks (ubuntu-latest)` (`114194480199`): **SUCCESS**
+- `Core Engine Tests & Benchmarks (windows-latest)` (`114194480395`): **SUCCESS**
+- `Geode Mod (Windows x64)` (`114194618511`): **SUCCESS** (`coderunknow.optigd.dll` verified in `.geode`)
+- `Geode Mod (Android64 (arm64-v8a))` (`114194618519`): **SUCCESS** (`coderunknow.optigd.android64.so` verified in `.geode`)
+- `Geode Mod (Android32 (armeabi-v7a))` (`114194618537`): **SUCCESS** (`coderunknow.optigd.android32.so` verified in `.geode`)
+- `Package Combined .geode Artifact` (`114195085038`): **SUCCESS** (`coderunknow.optigd-geode-package`, 447,492 bytes, containing `coderunknow.optigd.dll`, `coderunknow.optigd.android64.so`, `coderunknow.optigd.android32.so`, and `mod.json` at `v0.1.0-beta1`).
+
+

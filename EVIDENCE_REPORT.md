@@ -66,3 +66,19 @@ The following measurements were captured by executing the standalone C++20 bench
      python3 tools/generate_report.py --compare baseline_level.json optigd_level.json
      ```
      This outputs a Markdown comparison table with exact before/after deltas for Average FPS, Mean/Median(P50)/P95/P99 frame times, Mean Update CPU time, Culled Objects, Avoided Particles, and Avoided Heap Allocations.
+
+---
+
+## 5. Multi-Platform CI Build & Package Verification `[VERIFIED]`
+
+Verified on GitHub Actions workflow **`Build & Verify OptiGD`** (Run ID `38045635961` on branch `arena/3343543c-optigd`):
+
+| CI Job | Runner / Toolchain | Target | Verification Checks | Status |
+|---|---|---|---|---|
+| `Core Engine Tests & Benchmarks (ubuntu-latest)` (Job `114194480199`) | Ubuntu Linux x86_64 (GCC) | Standalone C++20 | `ctest` (9/9 suites), `optigd_benchmark`, `jq` version & `[SIMULATED]` checks, `tools/generate_report.py` | **PASSED (`[VERIFIED]`)** |
+| `Core Engine Tests & Benchmarks (windows-latest)` (Job `114194480395`) | Windows Server x64 (MSVC) | Standalone C++20 | `ctest` (9/9 suites), `optigd_benchmark.exe`, `jq` version & `[SIMULATED]` checks, `tools/generate_report.py` | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Windows x64)` (Job `114194618511`) | Windows Server x64 (`clang++` MSVC ABI + Geode SDK `5.10.1`) | `Win64` | Compiled `Hooks.cpp` + `optigd_core`; verified `coderunknow.optigd.dll` and `mod.json` (`v0.1.0-beta1`) inside `.geode` archive | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android64 (arm64-v8a))` (Job `114194618519`) | Ubuntu + Android NDK r29 (`aarch64-none-linux-android23` + Geode SDK `5.10.1`) | `Android64` | Compiled `Hooks.cpp` + `optigd_core`; verified `coderunknow.optigd.android64.so` and `mod.json` (`v0.1.0-beta1`) inside `.geode` archive | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android32 (armeabi-v7a))` (Job `114194618537`) | Ubuntu + Android NDK r29 (`armv7a-linux-androideabi23` + Geode SDK `5.10.1`) | `Android32` | Compiled `Hooks.cpp` + `optigd_core`; verified `coderunknow.optigd.android32.so` and `mod.json` (`v0.1.0-beta1`) inside `.geode` archive | **PASSED (`[VERIFIED]`)** |
+| `Package Combined .geode Artifact` (Job `114195085038`) | Ubuntu Linux + `geode-sdk/build-geode-mod/combine` | Multi-platform `.geode` | Verified combined `coderunknow.optigd.geode` (`447,492` bytes) contains `coderunknow.optigd.dll`, `coderunknow.optigd.android64.so`, `coderunknow.optigd.android32.so`, and `mod.json` (`v0.1.0-beta1`) | **PASSED (`[VERIFIED]`)** |
+

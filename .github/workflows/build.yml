@@ -93,27 +93,6 @@ jobs:
           target: ${{ matrix.target }}
           build-config: Release
 
-      - name: Diagnose Geode Build Failure
-        if: failure()
-        shell: bash
-        run: |
-          set +e
-          set +o pipefail
-          if [ ! -d "build" ]; then
-            echo "::error file=CMakeLists.txt,line=1::Build directory not created (failed in SDK setup or CMake configure)"
-          else
-            cmake --build build --config Release > diag.log 2>&1
-            grep -E "error:|fatal error:|FAILED|CMake Error|undefined" diag.log | head -n 15 | while IFS= read -r line; do
-              clean=$(echo "$line" | tr -d '\r' | sed 's/::/: :/g')
-              echo "::error file=src/geode/Hooks.cpp,line=1::$clean"
-            done
-            tail -n 15 diag.log | while IFS= read -r line; do
-              clean=$(echo "$line" | tr -d '\r' | sed 's/::/: :/g')
-              echo "::warning file=src/geode/Hooks.cpp,line=1::$clean"
-            done
-          fi
-          exit 1
-
       - name: Verify Platform .geode Package Contents
         shell: bash
         run: |
