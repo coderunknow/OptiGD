@@ -1,4 +1,5 @@
 #include "TriggerOptimizer.hpp"
+#include <algorithm>
 #include <cmath>
 
 namespace optigd::optimization {

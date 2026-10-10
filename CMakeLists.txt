@@ -66,6 +66,7 @@ else()
     target_compile_definitions(optigd_core PUBLIC OPTIGD_VERSION="${OPTIGD_VERSION_STRING}")
 
     if (MSVC)
+        target_compile_definitions(optigd_core PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
         target_compile_options(optigd_core PRIVATE /W4 /O2 /permissive-)
     else()
         target_compile_options(optigd_core PRIVATE -Wall -Wextra -Wpedantic -O3)

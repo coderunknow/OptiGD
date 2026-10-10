@@ -1,4 +1,5 @@
 #include "VisibilityCuller.hpp"
+#include <algorithm>
 #include <cmath>
 
 namespace optigd::optimization {

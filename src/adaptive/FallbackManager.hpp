@@ -2,6 +2,7 @@
 
 #include "../core/Types.hpp"
 #include "AdaptiveGovernor.hpp"
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <cstdint>
