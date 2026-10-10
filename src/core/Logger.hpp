@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
 #include <mutex>
 #include <chrono>
 #include <sstream>
@@ -27,10 +28,13 @@ struct LogEntry {
 
 class Logger {
 public:
+    using LogCallback = std::function<void(LogLevel, std::string_view)>;
+
     static Logger& instance();
 
     void setLevel(LogLevel level);
     LogLevel getLevel() const;
+    void setCallback(LogCallback callback);
 
     void log(LogLevel level, std::string_view msg);
     void debug(std::string_view msg);
@@ -54,6 +58,7 @@ private:
     size_t m_maxRingBufferSize{500};
     std::string m_filePath;
     bool m_fileLoggingEnabled{false};
+    LogCallback m_callback;
 
     void appendToRingBuffer(LogEntry entry);
     void writeToFile(const LogEntry& entry);

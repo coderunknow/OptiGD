@@ -45,6 +45,7 @@ void onModLoaded() {
             case core::LogLevel::Info:  log::info("{}", msg); break;
             case core::LogLevel::Warn:  log::warn("{}", msg); break;
             case core::LogLevel::Error: log::error("{}", msg); break;
+            case core::LogLevel::None:  break;
         }
     });
 
