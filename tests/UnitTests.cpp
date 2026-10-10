@@ -513,6 +513,25 @@ void testManagerAndCompatibility() {
     OPTIGD_ASSERT(hud.find("[OptiGD v0.1.0-beta1 Diagnostics]") != std::string::npos,
                   "Overlay header must display v0.1.0-beta1");
 
+    // Verify Profiler & Logger callback integration
+    {
+        OPTIGD_PROFILE_SCOPE("UnitTestProfileScope");
+    }
+    auto profCpu = optigd::profiling::Profiler::instance().getMetric("FrameUpdateCpu");
+    auto profScope = optigd::profiling::Profiler::instance().getMetric("UnitTestProfileScope");
+    OPTIGD_ASSERT(profCpu.callCount == 35, "Profiler must record FrameUpdateCpu for every frame");
+    OPTIGD_ASSERT(profScope.callCount == 1, "OPTIGD_PROFILE_SCOPE must record scoped execution");
+
+    bool callbackInvoked = false;
+    optigd::core::Logger::instance().setCallback([&](optigd::core::LogLevel lvl, std::string_view msg) {
+        if (lvl == optigd::core::LogLevel::Info && msg.find("CallbackTest") != std::string_view::npos) {
+            callbackInvoked = true;
+        }
+    });
+    optigd::core::Logger::instance().info("CallbackTest");
+    optigd::core::Logger::instance().setCallback(nullptr);
+    OPTIGD_ASSERT(callbackInvoked, "Logger callback bridge must invoke registered callback");
+
     mgr.onLevelExit();
     OPTIGD_PASS();
 }

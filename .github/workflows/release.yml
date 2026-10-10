@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   verify-tests:
@@ -21,7 +22,10 @@ jobs:
       - name: Execute Unit Tests
         run: ctest --test-dir build --output-on-failure --verbose
       - name: Execute Benchmarks
-        run: ./build/optigd_benchmark benchmark_release_report.json
+        run: |
+          ./build/optigd_benchmark benchmark_release_report.json
+          jq -e '.optigd_version == "0.1.0-beta1"' benchmark_release_report.json
+          jq -e '.evidence_classification == "[SIMULATED]"' benchmark_release_report.json
       - name: Upload Release Benchmark Report
         uses: actions/upload-artifact@v7
         with:

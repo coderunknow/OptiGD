@@ -37,6 +37,7 @@ void OptiGDManager::shutdown() {
     m_particleGovernor.clear();
     m_triggerOptimizer.clear();
     optimization::MatrixCache::instance().clear();
+    profiling::Profiler::instance().reset();
     m_initialized = false;
 }
 
@@ -66,6 +67,7 @@ void OptiGDManager::onLevelLoad() {
     m_particleGovernor.clear();
     m_triggerOptimizer.clear();
     optimization::MatrixCache::instance().clear();
+    profiling::Profiler::instance().reset();
     m_frameArena.reset();
 }
 
@@ -154,6 +156,23 @@ void OptiGDManager::endFrame() {
     m_currentStats.heapAllocationsAvoided =
         m_frameHeapAllocationsAvoided + static_cast<uint32_t>(m_frameArena.getAllocationCount());
     m_currentStats.optigdOverheadUs = m_frameOptigdOverheadUs + m_currentStats.governorTimeUs;
+
+    if (profiling::Profiler::instance().isEnabled()) {
+        profiling::Profiler::instance().record("FrameUpdateCpu", m_currentStats.updateCpuTimeUs);
+        profiling::Profiler::instance().record("OptiGDOverhead", m_currentStats.optigdOverheadUs);
+        if (m_currentStats.cullingTimeUs > 0.0) {
+            profiling::Profiler::instance().record("VisibilityCuller", m_currentStats.cullingTimeUs);
+        }
+        if (m_currentStats.particleTimeUs > 0.0) {
+            profiling::Profiler::instance().record("ParticleGovernor", m_currentStats.particleTimeUs);
+        }
+        if (m_currentStats.triggerTimeUs > 0.0) {
+            profiling::Profiler::instance().record("TriggerOptimizer", m_currentStats.triggerTimeUs);
+        }
+        if (m_currentStats.governorTimeUs > 0.0) {
+            profiling::Profiler::instance().record("AdaptiveGovernor", m_currentStats.governorTimeUs);
+        }
+    }
 
     diagnostics::DiagnosticsEngine::instance().recordFrameStats(m_currentStats);
 }

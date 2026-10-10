@@ -2,13 +2,15 @@
 set -e
 
 BUILD_DIR="build"
-mkdir -p "${BUILD_DIR}"
-cd "${BUILD_DIR}"
 
 echo "Configuring OptiGD CMake project..."
-cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+if command -v ninja >/dev/null 2>&1; then
+    cmake -B "${BUILD_DIR}" -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON
+else
+    cmake -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON
+fi
 
 echo "Compiling OptiGD test suite and benchmark harness..."
-ninja
+cmake --build "${BUILD_DIR}" --config Release --parallel
 
 echo "Build completed successfully."

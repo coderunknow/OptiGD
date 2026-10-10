@@ -114,4 +114,18 @@ All 6 jobs in workflow `Build & Verify OptiGD` passed on commit `a3e033e`:
 - `Geode Mod (Android32 (armeabi-v7a))` (`114194618537`): **SUCCESS** (`coderunknow.optigd.android32.so` verified in `.geode`)
 - `Package Combined .geode Artifact` (`114195085038`): **SUCCESS** (`coderunknow.optigd-geode-package`, 447,492 bytes, containing `coderunknow.optigd.dll`, `coderunknow.optigd.android64.so`, `coderunknow.optigd.android32.so`, and `mod.json` at `v0.1.0-beta1`).
 
+---
+
+## Entry 4 — 2026-10-10: Final Audit, Merge & `v0.1.0-beta1` Release Tagging
+
+### 4.1 Final Audit Findings & Hardening
+1. **`Profiler` Per-Frame Integration & Unit Test Coverage (`src/core/OptiGDManager.cpp`, `tests/UnitTests.cpp`)**:
+   - Wired `Profiler::instance().record(...)` into `OptiGDManager::endFrame()` for `FrameUpdateCpu`, `OptiGDOverhead`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, and `AdaptiveGovernor`, with automatic reset in `onLevelLoad()` and `shutdown()`.
+   - Added explicit unit test assertions in `testManagerAndCompatibility()` for `Profiler` (`FrameUpdateCpu` frame count and `OPTIGD_PROFILE_SCOPE`) and `Logger::setCallback()`.
+2. **Release Workflow Permissions & Metadata Gate (`.github/workflows/release.yml`, `scripts/build.sh`)**:
+   - Added `actions: write` alongside `contents: write` in `.github/workflows/release.yml` so `geode-sdk/build-geode-mod/combine@main`'s temporary artifact cleanup (`geekyeggo/delete-artifact@v6`) has full token permissions during tag-triggered release runs.
+   - Added `jq` version (`"0.1.0-beta1"`) and evidence classification (`"[SIMULATED]"`) assertions to `verify-tests` in `.github/workflows/release.yml`.
+   - Updated `scripts/build.sh` to pass `-DOPTIGD_STANDALONE_ONLY=ON` and fall back gracefully if `ninja` is absent.
+
+
 
