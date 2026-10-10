@@ -295,3 +295,19 @@ Two caveats recorded honestly:
    tester must still confirm the mod appears and runs in game. This is the one
    criterion that cannot be closed from here, and it is left open rather than
    reported as a pass.
+
+### 5.9 Merge & release tag
+
+Per explicit direction from the maintainer (which supersedes the original spec's
+"do not merge, tag, or publish" policy):
+
+- PR **#6** (`arena/0d1622f9-optigd` -> `main`) merged as merge commit
+  **`0153164`**. CI green on both commits (`38060134568`, `38060751581`): 6/6
+  jobs, including `Win64`, `Android32` and `Android64`.
+- Tagged **`v0.1.0-beta.2`** at `0153164`. The `Release OptiGD Package` workflow
+  (run `38061158956`) completed successfully and published the GitHub Release as
+  a **prerelease** with `coderunknow.optigd.geode` (473,383 bytes) and
+  `benchmark_release_report.json` attached.
+- The prerelease flag is correct: live in-game validation is still `BLOCKED`
+  (§5.8). Publishing as a prerelease, not a stable release, is the honest
+  classification.
