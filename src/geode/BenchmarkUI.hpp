@@ -65,7 +65,7 @@ public:
     void refresh();
 
 protected:
-    bool init();
+    bool init() override;
     void update(float dt) override;
 
 private:
@@ -132,7 +132,12 @@ private:
     cocos2d::CCLabelBMFont* m_textLabel{nullptr};
     cocos2d::CCLabelBMFont* m_pageLabel{nullptr};
     cocos2d::CCMenu* m_menu{nullptr};
-    std::map<Btn, cocos2d::CCMenuItemSpriteExtra*> m_buttons;
+    // `CCMenuItemSpriteExtra` is a *Geometry Dash* class: the generated
+    // bindings declare it in the GLOBAL namespace (`class
+    // CCMenuItemSpriteExtra : public cocos2d::CCMenuItemSprite`), so
+    // qualifying it with `cocos2d::` does not compile. The explicit `::`
+    // records that and keeps the name from being shadowed inside `optigd::`.
+    std::map<Btn, ::CCMenuItemSpriteExtra*> m_buttons;
 
     View m_view{View::Main};
     std::vector<std::string> m_pages;

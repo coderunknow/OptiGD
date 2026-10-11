@@ -621,3 +621,96 @@ actually sees, so the tools that check and render them were brought in line too.
   fixtures are synthetic because no CapFrameX export could be obtained here.
 - `.gitignore` gained `build-*/` so a sanitizer build directory (`build-asan`) cannot
   be committed by accident.
+
+### 6.12 CI failure after the beta.3 push: root cause, diagnosis method, fix `[VERIFIED by CI]`
+
+The beta.3 commit `4c686ef` was pushed to `arena/f6290987-optigd` and opened as draft
+PR #7. Two `Build & Verify OptiGD` runs (`38107167242` for the push, `38107240434` for
+the PR event) produced the same result:
+
+| Job | Result | Duration of the failing step |
+| --- | --- | --- |
+| Core Engine Tests & Benchmarks (ubuntu-latest) | success | - |
+| Core Engine Tests & Benchmarks (windows-latest) | success | - |
+| Geode Mod (Android64, arm64-v8a) | **failure** | 90 s |
+| Geode Mod (Android32, armeabi-v7a) | **failure** | 65 s |
+| Geode Mod (Windows x64) | **failure** | 150 s |
+| Package Combined .geode Artifact | skipped (dependency failed) | - |
+
+Both standalone jobs compiling and testing every core source passed, so the break was
+confined to the two translation units that only the Geode target builds:
+`src/geode/Hooks.cpp` and the new `src/geode/BenchmarkUI.cpp`.
+
+**Why the cause was not obvious.** The runner logs for those jobs are not retrievable
+from this environment: `GET /actions/jobs/{id}/logs` redirects to
+`productionresultssa8.blob.core.windows.net`, which is outside the network allowlist,
+and the check-run annotations carry only `Process completed with exit code 1` with no
+compiler diagnostics. The jobs API does expose per-step conclusions, which narrowed the
+failure to the `Build Geode Mod Package` step (the composite
+`geode-sdk/build-geode-mod@main` action) rather than to the `.geode` verification step
+that follows it. Step durations were *not* diagnostic: beta.2's successful Geode builds
+took 72-123 s, the same order as the failing ones, because the SDK loader is consumed as
+prebuilt binaries and the action restores a compiler cache.
+
+**How the cause was obtained.** A temporary workflow,
+`.github/workflows/geode-diagnose.yml` (commit `8a3927a`), replays the composite
+action's own configure and build commands - copied verbatim from its `action.yml` at
+`a0f7676e`, including the NDK r29 toolchain file, `-DANDROID_ABI=arm64-v8a`,
+`-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, clang/clang++ and `GEODE_TARGET_PLATFORM` -
+but redirects stdout and stderr into a file and posts the filtered result as a comment
+on PR #7, which *is* readable through the API. It is triggered only by a change to
+`.github/geode-diagnose-trigger`, gates nothing, and is meant to be deleted once it has
+served its purpose. Configure succeeded (`exit code 0`); the build failed with exactly
+two failing objects and 13 errors:
+
+```
+FAILED: CMakeFiles/OptiGD.dir/src/geode/BenchmarkUI.cpp.o   (1 warning, 10 errors)
+FAILED: CMakeFiles/OptiGD.dir/src/geode/Hooks.cpp.o         (3 errors)
+src/geode/BenchmarkUI.hpp:135:28: error: no member named 'CCMenuItemSpriteExtra'
+                                                     in namespace 'cocos2d'
+```
+
+**Root cause (defect V, introduced by beta.3).** `BenchmarkPopup` stored its buttons as
+`std::map<Btn, cocos2d::CCMenuItemSpriteExtra*>`. `CCMenuItemSpriteExtra` is not a
+cocos2d-x class; it is a Geometry Dash class that the generated bindings declare in the
+**global** namespace as `class CCMenuItemSpriteExtra : public
+cocos2d::CCMenuItemSprite`. The unqualified spelling used everywhere else in the file
+was correct, so only this one declaration was wrong - and because it sits inside the
+class body, the parse error destroyed the whole class definition. Every remaining error
+is cascade, not independent damage: `popup->autorelease()`, `Popup::init(...)`,
+`setTitle(...)`, three `addChild(...)` calls, `scheduleUpdate()`,
+`CCMenuItemSpriteExtra::create(sprite, this, selector)` ("no known conversion from
+`BenchmarkPopup*` to `cocos2d::CCObject*`") and `popup->show()` in `Hooks.cpp` all
+failed only because `BenchmarkPopup` was no longer a well-formed `Popup` subclass.
+
+**Fix.** `std::map<Btn, ::CCMenuItemSpriteExtra*> m_buttons;` with a comment recording
+the namespace rule, plus `bool init() override;` to clear the accompanying
+`-Winconsistent-missing-override` warning (the override is `cocos2d::CCLayer::init()`).
+No other change was needed. Every other `cocos2d::`-qualified name in `src/geode/` was
+audited against the SDK's cocos headers and the generated bindings
+(`CCDirector`, `CCLabelBMFont`, `CCMenu`, `CCNode`, `CCObject`, `CCParticleSystem`,
+`CCSize`, `SEL_MenuHandler`, `kCCPositionTypeGrouped` are all genuinely cocos2d).
+
+**What the diagnostic run also established**, which is worth keeping because it
+corrects assumptions that could not be checked locally:
+
+- The Geode target is compiled with `-std=c++23`. `CMAKE_CXX_STANDARD 20` in
+  `CMakeLists.txt` does not decide this: the SDK's
+  `target_compile_features(geode-sdk PUBLIC cxx_std_23)` raises the mod target, and
+  Geode 5.10.1 `static_assert`s on it. The standalone jobs still build at C++20.
+- Android builds use NDK `29.0.14206865` clang with `-flto=thin -fvisibility=hidden`
+  and `-Werror=return-type` (the only `-Werror`), targeting `android-23`.
+- Bindings are *not* pinned: the action takes the current `main` of
+  `geode-sdk/bindings`, so a bindings change can break this repository without any
+  commit here. That is an accepted upstream property of the workflow, not something
+  beta.3 introduced.
+- Every core source, including all of the new benchmark, diagnostics and JSON modules,
+  compiled cleanly for Android64 under clang/C++23/LTO before the build reached the two
+  Geode-only files (`[44/57]`-`[53/57]` all succeeded).
+
+**Honest limits of this fix.** It is verified by recompilation in CI, not by execution.
+Nothing here ran Geometry Dash: the build stops at compilation and packaging, the link
+step had not been reached when the error occurred, and no `.geode` produced by CI has
+ever been loaded by the Geode loader in this project. Criterion 10 (all three targets
+still build) can therefore only be claimed once the Geode jobs go green, and even then
+it means "compiles and packages", never "works in game".
