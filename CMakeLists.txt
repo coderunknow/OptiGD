@@ -6,12 +6,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(OptiGD VERSION 0.1.0 LANGUAGES CXX)
 
-set(OPTIGD_VERSION_STRING "0.1.0-beta.2")
+set(OPTIGD_VERSION_STRING "0.1.0-beta.3")
 
 # Collect core OptiGD source files (platform-agnostic C++20 engine)
 set(OPTIGD_CORE_SOURCES
     src/core/Logger.cpp
     src/core/GeodeVersion.cpp
+    src/core/JsonValue.cpp
     src/core/MemoryArena.cpp
     src/core/SpatialHash.cpp
     src/core/OptiGDManager.cpp
@@ -23,11 +24,18 @@ set(OPTIGD_CORE_SOURCES
     src/adaptive/FallbackManager.cpp
     src/profiling/Profiler.cpp
     src/diagnostics/DiagnosticsEngine.cpp
+    src/diagnostics/SampleWindow.cpp
     src/compatibility/CompatibilityLayer.cpp
     src/config/ConfigManager.cpp
     src/platform/Platform.cpp
     src/ui/DiagnosticsOverlay.cpp
+    src/ui/BenchmarkPanel.cpp
     src/benchmark/BenchmarkSuite.cpp
+    src/benchmark/BenchmarkTypes.cpp
+    src/benchmark/BenchmarkSession.cpp
+    src/benchmark/BenchmarkStore.cpp
+    src/benchmark/BenchmarkController.cpp
+    src/benchmark/BenchmarkCompare.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -44,6 +52,7 @@ if (DEFINED ENV{GEODE_SDK} AND NOT OPTIGD_STANDALONE_ONLY)
     add_library(${PROJECT_NAME} SHARED
         ${OPTIGD_CORE_SOURCES}
         src/geode/Hooks.cpp
+        src/geode/BenchmarkUI.cpp
     )
 
     target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -95,6 +104,32 @@ else()
                 ${CMAKE_CURRENT_SOURCE_DIR}/mod.json)
     else()
         message(WARNING "Python3 interpreter not found - skipping the mod.json metadata validation test")
+    endif()
+
+    # Benchmark Mode session artefacts: optigd_tests drives the controller
+    # headlessly (with a synthetic clock and a temporary store directory), writes
+    # a real baseline session, a real optimized session and a comparison, then
+    # tools/validate_benchmark_session_json.py checks the schema out of process.
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME OptiGDBenchmarkSessionJson
+            COMMAND ${CMAKE_COMMAND}
+                -DOPTIGD_TESTS=$<TARGET_FILE:optigd_tests>
+                -DOPTIGD_PYTHON=${Python3_EXECUTABLE}
+                -DOPTIGD_SCHEMA=${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_benchmark_session_json.py
+                -DOPTIGD_OUTDIR=${CMAKE_CURRENT_BINARY_DIR}/benchmark_sessions
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmitBenchmarkSessions.cmake)
+    endif()
+
+    # External-comparison tooling. The CapFrameX procedure is documented in-game
+    # (Benchmark Mode -> External) and in docs/BENCHMARKS.md; this checks that the
+    # script the procedure points at actually reads CapFrameX's CSV shapes and uses
+    # the same percentile definition as the internal statistics. Its fixtures are
+    # synthetic: no external capture exists in this repository, and the self-test
+    # says so.
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME OptiGDExternalComparisonTool
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_capframex.py --self-test)
     endif()
 
     # Benchmark Harness

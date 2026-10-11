@@ -46,7 +46,7 @@ jobs:
       - name: Verify Benchmark & Version Metadata
         shell: bash
         run: |
-          jq -e '.optigd_version == "0.1.0-beta.2"' benchmark_results.json
+          jq -e '.optigd_version == "0.1.0-beta.3"' benchmark_results.json
           jq -e '.evidence_classification == "[SIMULATED]"' benchmark_results.json
           python3 tools/generate_report.py benchmark_results.json
 
@@ -103,7 +103,7 @@ jobs:
           fi
           unzip -l "$GEODE_FILE"
           unzip -l "$GEODE_FILE" | grep -F "${{ matrix.expected_bin }}"
-          unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.2"'
+          unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
           unzip -p "$GEODE_FILE" mod.json | jq -e '.id == "coderunknow.optigd"'
 
   # ==========================================================================
@@ -131,7 +131,7 @@ jobs:
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.dll"
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android64.so"
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android32.so"
-          unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta.2"'
+          unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
 
       - name: Upload Combined .geode Mod
         uses: actions/upload-artifact@v7

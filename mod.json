@@ -6,9 +6,9 @@
     },
     "id": "coderunknow.optigd",
     "name": "OptiGD",
-    "version": "v0.1.0-beta.2",
+    "version": "v0.1.0-beta.3",
     "developer": "coderunknow",
-    "description": "Production-grade performance optimization engine for Geometry Dash (Spatial Culling, Particle Governor, Adaptive Frame Pacing, Memory Arena).",
+    "description": "Production-grade performance optimization engine for Geometry Dash (Spatial Culling, Particle Governor, Adaptive Frame Pacing, Memory Arena) with an in-game Benchmark Mode that records comparable baseline and optimized sessions locally.",
     "repository": "https://github.com/coderunknow/OptiGD",
     "issues": {
         "info": "Report bugs, compatibility conflicts, or performance regressions on GitHub Issues.",
@@ -120,6 +120,20 @@
             "default": 100.0,
             "min": 0.0,
             "max": 1000.0
+        },
+        "benchmark-duration-seconds": {
+            "name": "Benchmark: Capture Duration (seconds)",
+            "description": "Length of ACTIVE gameplay each Benchmark Mode session must accumulate before it finalizes. Pauses, application switches and intervals longer than 250 ms are excluded from this total and recorded separately, so a 60 second capture always contains 60 seconds of gameplay. The 60 second default matches the documented baseline-vs-optimized protocol.",
+            "type": "int",
+            "default": 60,
+            "min": 15,
+            "max": 600
+        },
+        "benchmark-stop-on-death": {
+            "name": "Benchmark: Stop Capture On Death / Restart",
+            "description": "When enabled, dying or restarting the attempt during a capture finalizes it immediately as incomplete and records a level_reset interruption, because the measured segment is no longer contiguous. When disabled the capture keeps running and is flagged with a segment_not_contiguous warning plus a reset count instead.",
+            "type": "bool",
+            "default": true
         }
     }
 }

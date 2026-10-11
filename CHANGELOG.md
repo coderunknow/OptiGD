@@ -4,6 +4,53 @@ All notable changes to **OptiGD** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0-beta.3] - 2026-10-11
+
+### Summary
+Release candidate that adds a complete **in-game Benchmark Mode** (pause-menu entry point, transient baseline/optimized captures, persisted session records, comparison, export), repairs the telemetry-integrity defects found while building it, and locks both behind regression tests. Test suite grows from 20 to **50** test functions; `ctest` from 4 to **6** checks.
+
+No live-game performance claim is made or implied by any of this: the benchmark system working is not evidence that OptiGD improves frame rate, and every artifact in this repository that came from a standalone binary is stamped `[SIMULATED]`.
+
+### Added
+- **Benchmark Mode core (`src/benchmark/*`, ~2,900 lines)**:
+  - `BenchmarkTypes` — modes, states, statuses, a fixed integrity-warning vocabulary, best-effort `LevelIdentity` (every field carries an explicit "known" flag), environment metadata, and the evidence-classification tags.
+  - `BenchmarkSession` — the record: measurement window, statistics, the configuration **actually in force**, integrity counters, warnings, measurement definitions and limitations. JSON round-trip gated on `report_kind` + `schema_version`; a newer schema is refused rather than reinterpreted.
+  - `BenchmarkStore` — atomic writes (temp + rename), id allocation by probing the directory, an allow-list so an id can never escape the store directory, tolerant listing (a corrupt file is reported as unreadable, not dropped), a rebuildable `index.json`, **no overwrite of prior evidence** and **no pruning**.
+  - `BenchmarkController` — lifecycle state machine: start / frame routing / pause + stall exclusion / reset / exit / cancel / auto-finalize, a verified transient config override re-checked every 16th frame, and persist with one retry under a fresh id.
+  - `BenchmarkCompare` — per-metric direction against a ±2 % noise threshold, absolute and relative deltas, compatibility gating, text rendering. `significanceClaimed` is `false` by construction.
+- **`src/ui/BenchmarkPanel.{hpp,cpp}`**: every string the user reads (HUD, main, results, detail, comparison, protocol, external procedure) plus pagination — platform-agnostic, so the Geode layer adds no measurement logic.
+- **`src/geode/BenchmarkUI.{hpp,cpp}`**: a 460×296 `geode::Popup` with six views (Main / Results / Detail / Compare / Protocol / External), an **OptiGD Benchmark** button added in `PauseLayer::customSetup()`, the runtime bridge, and notifications on terminal states.
+- **`src/diagnostics/SampleWindow.{hpp,cpp}`**: bounded measurement window (fixed-capacity ring + fixed-bin histogram + exact accumulators), O(1) push, and it **states** whether its percentiles are `exact` or `histogram_approximate`. Owns the single percentile definition used by the governor, the diagnostics engine and Benchmark Mode.
+- **`src/core/JsonValue.{hpp,cpp}`**: minimal JSON reader/writer so a saved session can be re-opened in-game without Python. Non-finite doubles serialize as `null` and set a `sawNonFinite` flag.
+- **Two new mod settings**: `benchmark-duration-seconds` (15–600, default 60) and `benchmark-stop-on-death` (default `true`).
+- **`tools/validate_benchmark_session_json.py`** + **`cmake/EmitBenchmarkSessions.cmake`**: `optigd_tests --emit-sessions <dir>` drives the real controller with a synthetic clock into a temporary directory, and the validator checks structure **and** cross-field invariants (frame budget identity, percentile ordering, `avg_fps` vs. mean frame time, `captured ≤ wall`, state vs. data, baseline passthrough disclosure, `override_applied`, warning vocabulary, index/session agreement, evidence classification). Verified against 13 hand-tampered artifacts: all 13 detected.
+- **`tools/compare_capframex.py`**: side-by-side comparison of external CapFrameX CSV captures (Windows x64), using the same percentile definition as the internal statistics, reporting the 1 % low FPS and the run-to-run spread, and refusing to read a file it cannot interpret. Includes `--self-test` on synthetic fixtures (ctest `OptiGDExternalComparisonTool`).
+- **`ConfigManager` transient override layer**: `m_config` (base, the only layer ever serialized) and `m_override` (transient), with `setRuntimeOverride` / `updateRuntimeOverride` / `clearRuntimeOverride`. A benchmark capture cannot corrupt the user's saved settings.
+- **`Platform`**: architecture string and thread CPU time (`CLOCK_THREAD_CPUTIME_ID` / `GetThreadTimes`).
+
+### Fixed
+- **Every stall ≥ 250 ms disappeared from the telemetry**: the frame delta was accepted only when `100 < us < 250000`, otherwise beta.2 substituted GD's own clamped `dt * 1e6` — a plausible frame time in place of the exact frames that make a level feel bad. The raw monotonic interval is now measured, classified against `core::kStallThresholdMs`, recorded as a gap and excluded from the window (`Hooks.cpp`, `OptiGDManager::endFrame`).
+- **A NaN metric was written as a plausible `0`**: `json::Value::asDouble(fallback)` returned the fallback for a non-finite stored double, so the serializer wrote `0` instead of `null` and `sawNonFinite` never fired. `asDouble` now returns the stored value exactly; sanitizing stays the writer's job.
+- **Session records claimed `[MEASURED-IN-GAME]` no matter who wrote them**: the classification was hardcoded in `toJson()`, so artifacts emitted by the standalone test binary asserted they had been measured inside a live Geometry Dash process. It is now a field stamped by the controller from the runtime it is attached to (`setLiveGameRuntime`, true only in the Geode bridge), defaults to `[SIMULATED]`, and loading a file may only **downgrade** it.
+- **A refused override still destroyed the override**: `ConfigManager::setRuntimeOverride` rewrote `m_override` even when returning `false`, so a second session wiped the configuration the first one needed restored. It now returns early without touching state.
+- **The controller's re-apply path was dead code**: `verifyOverride()` "re-installed" the override through a call that refuses while one is armed, so a session that noticed a clobbered configuration could never restore its own values — or the user's. The bridge gained `updateOverride`, used by both the take-over and re-apply paths.
+- **A hand-edited record could claim more than its data supported**: `BenchmarkSession::fromJson` never re-derived counters or warnings, so a `completed` session with zero samples loaded as comparable. Loading now calls `refreshDerivedWarnings()`.
+- **A user cancellation was relabelled `invalid`**: the terminal state is derived from the data, which is right for a capture that ended on its own, but it hid the one fact the user knows. `cancelled` is now preserved (still non-comparable, still carrying `no_samples_recorded` / `capture_shorter_than_target`); `invalid` is reserved for captures with too little data that were not explicitly cancelled.
+- **Two different "p95" definitions in one codebase** (audit finding J): `AdaptiveGovernor` indexed percentiles at `floor(n * p)` while the diagnostics window used nearest-rank. They differ by exactly one sample whenever `n * p` is an integer — the common case for a round window, where the governor's "p95" was the *slowest* frame in it. Both now call `SampleWindow::medianFromSorted` / `percentileFromSorted`.
+- **Telemetry hygiene** (audit findings A–I): the diagnostics window now discloses its sample count, window and duration (`report_schema_version: 2`) instead of reporting `total_frames` from an unbounded counter while percentiles came from ≤ 3600 samples; `DiagnosticsEngine::reset()` is level-scoped; telemetry is gated on an active `PlayLayer` (frames recorded in `LevelEditorLayer` are not gameplay); the fabricated `culledParticles = emitters * 32` estimate is gone; the `uint64 → uint32` matrix-cache delta truncation is gone; `updateThreadCpuUs` is reported separately from the wall-clock `updateCpuTimeUs`; subsystem time recorded outside an open frame window is counted separately instead of being attributed to the next frame; the diagnostics export is atomic and checks its stream state; and non-finite values are sanitized with an explicit note instead of emitting unparseable `nan` / `inf`.
+- **Diagnostics overlay labels**: `Update CPU:` implied thread CPU time for a wall-clock span. It now reads `Update: X ms wall / Y ms thread`, and the overlay states that its numbers are internal telemetry from a 120-frame governor window, **not** presented-frame or GPU timing.
+
+### Changed
+- `tests/UnitTests.cpp` grows from 20 to 50 test functions; the 30 new ones lock the benchmark invariants and the telemetry-integrity fixes behind regressions.
+- `ctest` grows from 4 to 6 checks (`OptiGDBenchmarkSessionJson`, `OptiGDExternalComparisonTool`).
+- `optigd_diagnostics.json` gains `report_schema_version: 2`, `paused_frames` and window-disclosure keys. Every beta.2 key is retained; a file without `report_schema_version` is v1 and still validates.
+- Version strings (`mod.json`, `Types.hpp`, `CMakeLists.txt`, CI `jq -e` gates, tools, tests) move to `v0.1.0-beta.3` / `0.1.0-beta.3`.
+
+### Notes
+- Live in-game Benchmark Mode runs, live frame-time captures, and the CapFrameX external procedure remain **`[NOT RUN] / [BLOCKED]`**: this environment has no Geometry Dash binary, no GPU/display, no Geode loader, no Windows host and no Android device. `src/geode/*` compiles only in CI.
+- No merge, no release tag and no official release were performed for beta.3.
+- Stale Draft PR #4 (`arena/21ca20f2-optigd`) is untouched and superseded by merged PRs #5 and #6.
+
 ## [0.1.0-beta.2] - 2026-10-10
 
 ### Summary

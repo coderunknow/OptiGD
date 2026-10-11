@@ -1,6 +1,12 @@
 #include "OptiGDManager.hpp"
 #include "Logger.hpp"
 #include "GeodeVersion.hpp"
+#include "../benchmark/BenchmarkController.hpp"
+#include "../platform/Platform.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace optigd::core {
 
@@ -49,6 +55,10 @@ void OptiGDManager::shutdown() {
     m_triggerOptimizer.clear();
     optimization::MatrixCache::instance().clear();
     profiling::Profiler::instance().reset();
+    // Restores the user's saved configuration if a benchmark session left a
+    // transient override installed. Deliberately on the shutdown path so an
+    // unload can never strand the mod in a forced-passthrough configuration.
+    benchmark::BenchmarkController::instance().restoreConfiguration();
     m_initialized = false;
 }
 
@@ -80,15 +90,36 @@ void OptiGDManager::onLevelLoad() {
     optimization::MatrixCache::instance().clear();
     profiling::Profiler::instance().reset();
     m_frameArena.reset();
+
+    // beta.3 fix (defect B): the telemetry capture is level-scoped, so it starts
+    // here. In beta.2 `DiagnosticsEngine::reset()` ran only from `initialize()`
+    // at mod load, which meant `optigd_diagnostics.json` aggregated every level
+    // and every attempt played since the mod was loaded and still called itself
+    // a level report.
+    diagnostics::DiagnosticsEngine::instance().reset();
+    m_governor.clearHistory();
+    clearOutOfWindowAccounting();
+    m_frameOpen = false;
+    m_lastInterFrameIntervalUs = 0.0;
+    m_lastFrameWasStall = false;
 }
 
 void OptiGDManager::onLevelReset() {
     m_triggerOptimizer.resetTriggerStates();
     m_frameArena.reset();
+    diagnostics::DiagnosticsEngine::instance().noteLevelReset();
+    // Benchmark Mode stops (or warns) on an attempt restart; see the
+    // `benchmark-stop-on-death` setting. Notified here rather than from the hook
+    // so every caller of `onLevelReset()` is covered.
+    benchmark::BenchmarkController::instance().onLevelReset();
 }
 
 void OptiGDManager::onLevelExit() {
     OPTIGD_LOG_INFO("OptiGD cleaning up level acceleration structures...");
+    // Restores the transient benchmark configuration and finalizes any session
+    // still open. Runs *before* the subsystems are torn down so the persisted
+    // record describes the configuration that was actually in force.
+    benchmark::BenchmarkController::instance().onLevelExit();
     m_culler.clear();
     m_particleGovernor.clear();
     m_triggerOptimizer.clear();
@@ -96,11 +127,28 @@ void OptiGDManager::onLevelExit() {
     m_frameArena.reset();
 }
 
+void OptiGDManager::attributeSubsystemTime(double& statSlotUs, double us) {
+    if (!std::isfinite(us) || us <= 0.0) return;
+    if (!m_frameOpen) {
+        // Recorded outside a beginFrame()/endFrame() window (CCParticleSystem
+        // updates are not confined to GJBaseGameLayer::update). Counted and
+        // reported separately rather than being charged to an unrelated frame.
+        ++m_outOfWindowSubsystemEvents;
+        m_outOfWindowSubsystemUs += us;
+        return;
+    }
+    statSlotUs += us;
+    recordSubsystemOverheadUs(us);
+}
+
 void OptiGDManager::beginFrame() {
     m_frameStartTime = std::chrono::steady_clock::now();
+    m_frameStartThreadCpuUs = platform::Platform::getCurrentThreadCpuTimeUs();
+    m_frameOpen = true;
     m_frameArena.reset();
     m_currentStats = FrameStats{};
     m_externalFrameDeltaUs = 0.0;
+    m_framePaused = false;
     m_frameOptigdOverheadUs = 0.0;
     m_frameHeapAllocationsAvoided = 0;
     m_frameStartMatrixHits = optimization::MatrixCache::instance().getHits();
@@ -112,8 +160,27 @@ void OptiGDManager::endFrame() {
     auto endTime = std::chrono::steady_clock::now();
     double updateUs = std::chrono::duration<double, std::micro>(endTime - m_frameStartTime).count();
 
+    // `updateCpuTimeUs` is a WALL-CLOCK span of the hooked update() call, not
+    // thread CPU time. beta.3 adds the real thread CPU time next to it so a
+    // preempted update can be told apart from a slow one; the report states both
+    // and says which is which.
     m_currentStats.updateCpuTimeUs = updateUs;
+    const uint64_t endThreadCpuUs = platform::Platform::getCurrentThreadCpuTimeUs();
+    m_currentStats.updateThreadCpuUs =
+        (endThreadCpuUs > m_frameStartThreadCpuUs)
+            ? static_cast<double>(endThreadCpuUs - m_frameStartThreadCpuUs)
+            : 0.0;
+
     m_currentStats.totalFrameTimeUs = (m_externalFrameDeltaUs > 0.0) ? m_externalFrameDeltaUs : updateUs;
+
+    // Stall classification, using the single shared threshold in Types.hpp.
+    const double intervalUs = m_currentStats.totalFrameTimeUs;
+    m_lastInterFrameIntervalUs = intervalUs;
+    m_lastFrameWasStall = std::isfinite(intervalUs) && intervalUs > kStallThresholdUs;
+    m_currentStats.gapFrame = m_lastFrameWasStall || m_framePaused;
+    m_currentStats.frameCounted =
+        !m_currentStats.gapFrame && std::isfinite(intervalUs) && intervalUs > 0.0;
+    m_framePaused = false;
 
     m_currentStats.totalObjects = static_cast<uint32_t>(m_culler.getTotalObjectCount());
     m_currentStats.visibleObjects = static_cast<uint32_t>(m_culler.getLastVisibleCount());
@@ -122,10 +189,12 @@ void OptiGDManager::endFrame() {
     m_currentStats.newlyCulledObjects = static_cast<uint32_t>(m_culler.getLastNewlyCulledCount());
 
     m_currentStats.activeParticles = m_particleGovernor.getTotalActiveParticles();
+    // beta.3 fix (defect D): report only what was measured. beta.2 substituted
+    // `getLastCulledEmitterCount() * 32` whenever the measured avoided-particle
+    // count was 0, which put a fabricated estimate into the same field as a real
+    // measurement and inflated `total_particles_avoided` in every report. Zero
+    // is the honest value when no particles were avoided.
     m_currentStats.culledParticles = m_particleGovernor.getLastAvoidedParticleCount();
-    if (m_currentStats.culledParticles == 0) {
-        m_currentStats.culledParticles = m_particleGovernor.getLastCulledEmitterCount() * 32;
-    }
 
     // TriggerOptimizer only ever *measures* the lookahead window; it never
     // gates or replaces native Geometry Dash trigger execution. Report its
@@ -143,10 +212,14 @@ void OptiGDManager::endFrame() {
 
     uint64_t curHits = optimization::MatrixCache::instance().getHits();
     uint64_t curMisses = optimization::MatrixCache::instance().getMisses();
-    m_currentStats.matrixCacheHits = static_cast<uint32_t>(
-        curHits >= m_frameStartMatrixHits ? (curHits - m_frameStartMatrixHits) : curHits);
-    m_currentStats.matrixCacheMisses = static_cast<uint32_t>(
-        curMisses >= m_frameStartMatrixMisses ? (curMisses - m_frameStartMatrixMisses) : curMisses);
+    // beta.3 fix (defect E): FrameStats.matrixCacheHits/Misses are uint64_t but
+    // beta.2 computed the per-frame delta as uint64_t and then truncated it with
+    // `static_cast<uint32_t>`, so a large delta wrapped to a small number
+    // instead of being reported. No cast is needed here at all.
+    m_currentStats.matrixCacheHits =
+        (curHits >= m_frameStartMatrixHits) ? (curHits - m_frameStartMatrixHits) : curHits;
+    m_currentStats.matrixCacheMisses =
+        (curMisses >= m_frameStartMatrixMisses) ? (curMisses - m_frameStartMatrixMisses) : curMisses;
 
     // Record frame time and run AdaptiveGovernor using the frame arena for zero-heap percentile sorting
     m_governor.recordFrameTime(m_currentStats.totalFrameTimeUs);
@@ -167,8 +240,18 @@ void OptiGDManager::endFrame() {
                        fallbackChanged;
 
     if (tierChanged) {
+        // Writes the ACTIVE configuration layer. While a benchmark session owns
+        // that layer (ConfigManager's transient override) the write stays inside
+        // the session and the user's saved settings are untouched; see
+        // `ConfigManager::setConfig`.
         config::ConfigManager::instance().setConfig(m_activeConfig);
         applyConfigToSubsystems();
+        if (fallbackChanged) {
+            benchmark::BenchmarkController::instance().onFallbackEvent();
+        }
+        if (m_activeConfig.tier != prevConfig.tier) {
+            benchmark::BenchmarkController::instance().onTierTransition();
+        }
     }
 
     m_currentStats.arenaUsedBytes = m_frameArena.getUsedBytes();
@@ -202,6 +285,13 @@ void OptiGDManager::endFrame() {
     }
 
     diagnostics::DiagnosticsEngine::instance().recordFrameStats(m_currentStats);
+
+    // Benchmark Mode sees the finished frame last, so every subsystem has
+    // already contributed its own timing. The controller classifies the interval
+    // (counted / excluded stall / rejected) against the same shared threshold.
+    benchmark::BenchmarkController::instance().onFrame(m_currentStats);
+
+    m_frameOpen = false;
 }
 
 } // namespace optigd::core

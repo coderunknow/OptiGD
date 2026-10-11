@@ -80,14 +80,92 @@ void ConfigManager::resetToDefaults() {
 
 core::OptiConfig ConfigManager::getConfig() const {
     std::lock_guard<std::mutex> lock(m_mutex);
+    // The transient layer wins while it is active. Callers (OptiGDManager and
+    // every hook) read the configuration through here, which is what makes a
+    // Benchmark Mode baseline actually reach the runtime instead of only
+    // changing what a settings page displays.
+    return m_overrideActive ? m_override : m_config;
+}
+
+core::OptiConfig ConfigManager::getBaseConfig() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_config;
 }
 
 void ConfigManager::setConfig(const core::OptiConfig& config) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    // Writes to the ACTIVE layer. During a benchmark this keeps per-frame
+    // adaptive-tier and safety-fallback write-back inside the session and out
+    // of the user's saved preferences.
+    if (m_overrideActive) {
+        m_override = config;
+    } else {
+        m_config = config;
+    }
+}
+
+void ConfigManager::setBaseConfig(const core::OptiConfig& config) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_config = config;
 }
 
+bool ConfigManager::setRuntimeOverride(const core::OptiConfig& overrideConfig, std::string reason) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Returning false for a re-arm lets a caller notice that something else
+    // already installed an override, instead of quietly replacing it. The state
+    // is left completely untouched in that case: a refused install that still
+    // rewrote the override would destroy the configuration the first caller
+    // needs restored later.
+    if (m_overrideActive) {
+        return false;
+    }
+    m_override = overrideConfig;
+    m_overrideActive = true;
+    m_overrideReason = std::move(reason);
+    return true;
+}
+
+bool ConfigManager::updateRuntimeOverride(const core::OptiConfig& overrideConfig) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    // Re-asserts the configuration of an override that is ALREADY armed, keeping
+    // the original reason. Benchmark Mode uses this when it detects that
+    // something else rewrote the active configuration mid-capture: the session
+    // still owns the override, it just has to put its own values back. Fails when
+    // no override is armed, so a re-apply can never silently arm a new one.
+    if (!m_overrideActive) {
+        return false;
+    }
+    m_override = overrideConfig;
+    return true;
+}
+
+bool ConfigManager::clearRuntimeOverride() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_overrideActive) return false;
+    m_overrideActive = false;
+    m_override = core::OptiConfig{};
+    m_overrideReason.clear();
+    return true;
+}
+
+bool ConfigManager::hasRuntimeOverride() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_overrideActive;
+}
+
+std::string ConfigManager::getRuntimeOverrideReason() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_overrideReason;
+}
+
+core::OptiConfig ConfigManager::getRuntimeOverrideConfig() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_override;
+}
+
+// Operates on the BASE layer only. While a benchmark override is active the
+// user's tier choice is recorded in the base layer and takes effect again as
+// soon as the override is cleared.
 void ConfigManager::applyTierPresetUnlocked(core::PerformanceTier tier) {
     m_config.tier = tier;
     // Single source of truth: see core::kTierDefaults in Types.hpp.
@@ -142,6 +220,8 @@ core::OptiConfig ConfigManager::syncFromSettings(const RuntimeSettingsInput& inp
 
 std::string ConfigManager::serialize() const {
     std::lock_guard<std::mutex> lock(m_mutex);
+    // Always the BASE layer: a transient benchmark override must never be
+    // persisted as if it were the user's preference.
     std::ostringstream ss;
     ss << "tier=" << static_cast<int>(m_config.tier) << "\n";
     ss << "targetFps=" << m_config.targetFrameRate << "\n";

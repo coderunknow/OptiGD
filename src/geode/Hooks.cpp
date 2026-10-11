@@ -1,5 +1,7 @@
 #include "OptiGDMod.hpp"
+#include "BenchmarkUI.hpp"
 #include "../core/Logger.hpp"
+#include "../ui/BenchmarkPanel.hpp"
 
 #ifdef GEODE_IS_COMPILING
 
@@ -7,6 +9,9 @@
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/CCParticleSystem.hpp>
+#include <Geode/modify/PauseLayer.hpp>
+#include <Geode/binding/ButtonSprite.hpp>
+#include <Geode/binding/CCMenuItemSpriteExtra.hpp>
 #include <chrono>
 
 using namespace geode::prelude;
@@ -35,7 +40,17 @@ void syncSettingsWithConfig() {
     input.customCameraPaddingY = static_cast<float>(mod->getSettingValue<double>("custom-camera-padding-y"));
 
     config::ConfigManager::instance().syncFromSettings(input);
+    // `reloadConfig()` reads the ACTIVE configuration layer, so while a
+    // benchmark session owns a transient override this re-reads the override and
+    // leaves the user's saved settings alone. That is the property Benchmark
+    // Mode depends on: `PlayLayer::init` calls this function on every level
+    // load, and it must not be able to undo a capture in progress.
     core::OptiGDManager::instance().reloadConfig();
+
+    // Benchmark settings are policy, not configuration: they never enter
+    // OptiConfig and therefore never enter a saved session's configuration
+    // block, which must describe the optimization settings only.
+    applyBenchmarkSettingsToPolicy();
 }
 
 void onModLoaded() {
@@ -56,6 +71,12 @@ void onModLoaded() {
     }
 
     core::OptiGDManager::instance().initialize(gdVer, geodeVer);
+
+    // Wires the Geode-backed services (save directory, active configuration,
+    // level identity, environment, clocks) into the platform-agnostic benchmark
+    // controller before anything can start a session.
+    installBenchmarkRuntimeBridge();
+
     syncSettingsWithConfig();
 
     listenForSettingChanges<std::string>("tier-preset", [](std::string) {
@@ -99,6 +120,12 @@ void onModLoaded() {
     });
     listenForSettingChanges<double>("custom-camera-padding-y", [](double) {
         syncSettingsWithConfig();
+    });
+    listenForSettingChanges<int64_t>("benchmark-duration-seconds", [](int64_t) {
+        applyBenchmarkSettingsToPolicy();
+    });
+    listenForSettingChanges<bool>("benchmark-stop-on-death", [](bool) {
+        applyBenchmarkSettingsToPolicy();
     });
 }
 
@@ -155,9 +182,22 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
     struct Fields {
         std::chrono::steady_clock::time_point lastFrameTimestamp{};
         bool hasLastFrameTimestamp{false};
+        bool lastPaused{false};
     };
 
     void update(float dt) {
+        // beta.3 fix (defect C): `GJBaseGameLayer` is also the base class of
+        // `LevelEditorLayer`, so beta.2 folded editor frames into gameplay
+        // telemetry. Measurement now runs only for the live PlayLayer.
+        auto* playLayer = PlayLayer::get();
+        const bool isGameplayFrame =
+            (playLayer != nullptr) &&
+            (static_cast<cocos2d::CCNode*>(playLayer) == static_cast<cocos2d::CCNode*>(this));
+        if (!isGameplayFrame) {
+            GJBaseGameLayer::update(dt);
+            return;
+        }
+
         auto& mgr = optigd::core::OptiGDManager::instance();
         auto now = std::chrono::steady_clock::now();
 
@@ -165,15 +205,39 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
         if (m_fields->hasLastFrameTimestamp) {
             double wallDeltaUs = std::chrono::duration<double, std::micro>(
                 now - m_fields->lastFrameTimestamp).count();
-            if (wallDeltaUs > 100.0 && wallDeltaUs < 250000.0) {
+            // beta.3 fix (defect O): the upper bound is gone. beta.2 accepted the
+            // wall delta only below 250 ms and otherwise silently substituted
+            // the engine's clamped `dt`, which turned a multi-second pause,
+            // alt-tab or load stall into an ordinary-looking fast frame. The
+            // real interval is now passed through unchanged and classified
+            // downstream against `core::kStallThresholdUs`, so a stall is
+            // visible in the level report and excludable from a benchmark
+            // capture. The 100 us lower bound stays: it rejects a bogus delta
+            // when update() runs twice within one tick.
+            if (wallDeltaUs > 100.0) {
                 interFrameUs = wallDeltaUs;
             }
         }
         m_fields->lastFrameTimestamp = now;
         m_fields->hasLastFrameTimestamp = true;
 
+        // Pause observation. A paused game keeps calling update() at the display
+        // rate, so a pause is invisible to interval-based gap detection and can
+        // only be caught from the game's own state. Without this a benchmark
+        // capture could be "completed" while the player sat in the pause menu.
+        const bool paused = playLayer->m_isPaused;
+        if (paused != m_fields->lastPaused) {
+            m_fields->lastPaused = paused;
+            if (paused) {
+                optigd::benchmark::BenchmarkController::instance().onPauseObserved();
+            } else {
+                optigd::benchmark::BenchmarkController::instance().onResumeObserved();
+            }
+        }
+
         mgr.beginFrame();
         mgr.setExternalFrameDeltaUs(interFrameUs);
+        mgr.setFramePaused(paused);
 
         GJBaseGameLayer::update(dt);
 
@@ -239,6 +303,12 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
 class $modify(OptiGDPlayLayer, PlayLayer) {
     struct Fields {
         cocos2d::CCLabelBMFont* overlayLabel{nullptr};
+        // Benchmark Mode HUD. Kept separate from the diagnostics overlay so the
+        // two can be enabled independently, and placed in the opposite corner so
+        // they cannot overlap.
+        cocos2d::CCLabelBMFont* benchLabel{nullptr};
+        float benchHideCountdown{0.0f};
+        bool benchWasRunning{false};
         uint32_t registeredObjectSeq{0};
         uint32_t registeredTriggerSeq{0};
         uint32_t frameTick{0};
@@ -277,6 +347,24 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
             m_fields->overlayLabel->setVisible(optigd::ui::DiagnosticsOverlay::instance().isEnabled());
             this->addChild(m_fields->overlayLabel);
         }
+
+        auto benchWinSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
+        m_fields->benchLabel = cocos2d::CCLabelBMFont::create("", "chatFont.fnt");
+        if (m_fields->benchLabel) {
+            m_fields->benchLabel->setScale(0.42f);
+            m_fields->benchLabel->setAnchorPoint({1.0f, 1.0f});
+            m_fields->benchLabel->setPosition({benchWinSize.width - 10.0f,
+                                               benchWinSize.height - 10.0f});
+            m_fields->benchLabel->setZOrder(9999);
+            m_fields->benchLabel->setOpacity(225);
+            m_fields->benchLabel->setColor({255, 214, 110});
+            m_fields->benchLabel->setVisible(false);
+            this->addChild(m_fields->benchLabel);
+        }
+
+        // A level load is a hard boundary for measurement: any capture still
+        // open belongs to the previous level and must not continue into this one.
+        optigd::benchmark::BenchmarkController::instance().onLevelExit();
 
         return true;
     }
@@ -443,6 +531,43 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
                 m_fields->overlayLabel->setString(text.c_str());
             }
         }
+
+        // --- Benchmark Mode HUD -------------------------------------------
+        auto& controller = optigd::benchmark::BenchmarkController::instance();
+        const bool benchRunning = controller.isRunning();
+        if (m_fields->benchWasRunning && !benchRunning) {
+            // The capture just reached a terminal state. The result is kept on
+            // screen for a few seconds and announced, because the panel that
+            // started it may already be closed.
+            m_fields->benchHideCountdown = 8.0f;
+            const auto finished = controller.getSnapshot();
+            optigd::geode_integration::showBenchmarkNotification(
+                std::string("OptiGD benchmark ") +
+                optigd::benchmark::stateDisplayName(finished.state) +
+                (finished.persisted ? " - saved locally" : " - NOT SAVED"),
+                !finished.persisted);
+        }
+        m_fields->benchWasRunning = benchRunning;
+        if (!benchRunning && m_fields->benchHideCountdown > 0.0f) {
+            m_fields->benchHideCountdown -= dt;
+        }
+        if (m_fields->benchLabel) {
+            const bool showBench = benchRunning || m_fields->benchHideCountdown > 0.0f;
+            m_fields->benchLabel->setVisible(showBench);
+            // Rebuilt every kHudRefreshFrames frames rather than every frame:
+            // formatting a string per frame would make the instrumentation part
+            // of what it measures. The live percentiles shown here are computed
+            // with StatPrecision::Fast and are printed with a '~' marker; the
+            // saved session always carries the exact values.
+            if (showBench &&
+                (m_fields->frameTick % optigd::ui::BenchmarkPanel::kHudRefreshFrames == 0)) {
+                const auto snapshot = controller.getSnapshot();
+                const auto live = controller.getLiveStatistics(
+                    optigd::diagnostics::StatPrecision::Fast);
+                m_fields->benchLabel->setString(
+                    optigd::ui::BenchmarkPanel::formatHud(snapshot, live).c_str());
+            }
+        }
     }
 
     void resetLevel() {
@@ -552,6 +677,58 @@ class $modify(OptiGDParticleSystem, cocos2d::CCParticleSystem) {
         auto endTime = std::chrono::steady_clock::now();
         mgr.recordParticleTimeUs(
             std::chrono::duration<double, std::micro>(endTime - startTime).count());
+    }
+};
+
+// ============================================================================
+// Cross-Platform PauseLayer Hook: Benchmark Mode entry point
+// (Windows x64, Android32, Android64 - PauseLayer is [[link(android)]] and
+//  exposes `virtual void customSetup()` in bindings/2.2081)
+// ============================================================================
+class $modify(OptiGDPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+
+        auto* director = cocos2d::CCDirector::get();
+        if (!director) return;
+        const auto winSize = director->getWinSize();
+
+        // A dedicated CCMenu rather than the pause layer's own container:
+        // PauseLayer builds its widgets inside customSetup() and does not expose
+        // a menu member in the 2.2081 bindings.
+        auto* menu = cocos2d::CCMenu::create();
+        if (!menu) return;
+        menu->setPosition({0.f, 0.f});
+        this->addChild(menu, 100);
+
+        auto* sprite = ButtonSprite::create("OptiGD Benchmark", "goldFont.fnt",
+                                            "GJ_button_01.png", 0.7f);
+        if (!sprite) return;
+        sprite->setScale(0.85f);
+
+        auto* button = CCMenuItemSpriteExtra::create(
+            sprite, this, menu_selector(OptiGDPauseLayer::onBenchmark));
+        if (!button) return;
+
+        // Bottom-right. The pause menu's own widgets occupy the centre column
+        // (restart / edit / settings), the left column (practice toggle, music
+        // and SFX sliders) and the top-right corner (close), so this corner is
+        // the least contested. NOTE: the placement is derived from the binding's
+        // widget list, not from a visual check - no Geometry Dash runtime was
+        // available in the build environment, so the exact on-screen position is
+        // UNVERIFIED against a live 2.2081 pause menu.
+        button->setPosition({winSize.width - 80.f, 44.f});
+        menu->addChild(button);
+    }
+
+    void onBenchmark(cocos2d::CCObject*) {
+        auto* popup = optigd::geode_integration::BenchmarkPopup::create();
+        if (!popup) {
+            optigd::geode_integration::showBenchmarkNotification(
+                "OptiGD Benchmark Mode could not open its panel.", true);
+            return;
+        }
+        popup->show();
     }
 };
 
