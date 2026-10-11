@@ -714,3 +714,51 @@ step had not been reached when the error occurred, and no `.geode` produced by C
 ever been loaded by the Geode loader in this project. Criterion 10 (all three targets
 still build) can therefore only be claimed once the Geode jobs go green, and even then
 it means "compiles and packages", never "works in game".
+
+### 6.13 The fix verified in CI, and the diagnostic scaffolding removed `[VERIFIED by CI]`
+
+Commit `edc0048` changes exactly two things in `src/geode/BenchmarkUI.hpp`: the button map
+becomes `std::map<Btn, ::CCMenuItemSpriteExtra*>`, and `bool init()` gains `override`.
+Nothing else in the repository was touched to obtain a passing build - no target removed,
+no source excluded, no warning suppressed, no `mod.json` or `CMakeLists.txt` change.
+
+Workflow `Build & Verify OptiGD`, run `38108365707` (push event) and run `38108363696`
+(pull-request event), both on `edc0048`: **all 6 jobs passed.**
+
+| Job | Job ID (`38108365707`) | Result |
+| --- | --- | --- |
+| Core Engine Tests & Benchmarks (ubuntu-latest) | `114378570355` | success |
+| Core Engine Tests & Benchmarks (windows-latest) | `114378570482` | success |
+| Geode Mod (Windows x64) | `114378862760` | success |
+| Geode Mod (Android64 (arm64-v8a)) | `114378862767` | success |
+| Geode Mod (Android32 (armeabi-v7a)) | `114378862722` | success |
+| Package Combined .geode Artifact | `114379175513` | success |
+
+The per-platform verification steps ran and passed, so the archives themselves were
+inspected rather than assumed: each platform's `.geode` was listed with `unzip -l` and
+grepped for its own binary name, and `mod.json` inside each archive was asserted with
+`jq -e` to carry `.version == "v0.1.0-beta.3"` and `.id == "coderunknow.optigd"`. The
+combined archive (artifact `coderunknow.optigd-geode-package`, **1,037,855 bytes**, against
+470,639 bytes for beta.2) was asserted to contain all three binaries plus the same
+`mod.json` version. The linking and packaging stages that run 1 had never reached were
+therefore exercised for the first time in this release, and they produced the artefacts
+criterion 10 asks about.
+
+`.github/workflows/geode-diagnose.yml` and `.github/geode-diagnose-trigger` are deleted in
+the commit that records this section. They existed for one purpose - to make an
+unreachable compiler error readable - and keeping a workflow whose only job is to post raw
+build logs as pull-request comments would leave a noisy, unpinned surface in the
+repository. If a future Geode-only compile error needs the same treatment, the recipe is
+in §6.12: copy the composite action's own configure/build commands, redirect them to a
+file, and post the filtered result somewhere the API can read. Its last run
+(`38108363653`) failed in the log-extraction step, after a successful configure and build,
+because the extraction script assumed there would be errors to find; that is scaffolding
+behaviour, not a finding about OptiGD, and the real workflow's jobs are the authority.
+
+Two honest boundaries on this green run. First, it verifies compilation, linking and
+packaging on three targets - it does not verify that the mod loads, that the pause-menu
+button appears, that the popup renders, or that a capture records anything, because no
+Geometry Dash client, Geode loader, GPU or Android device took part. Second, the bindings
+the Geode jobs compile against are whatever `geode-sdk/bindings` `main` happens to be when
+the job runs; that is a property of the upstream action, and it means a green run is a
+statement about a moment, not a permanent guarantee.

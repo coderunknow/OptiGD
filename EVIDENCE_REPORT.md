@@ -123,8 +123,8 @@ assert the current string, including that `v0.1.0-beta3` — no dot — is rejec
 | **`BenchmarkController`** (`src/benchmark/BenchmarkController.*`) | `VERIFIED` (mechanism) / `PARTIAL` (in-game) | New in beta.3. Driven from `Hooks.cpp` (`GJBaseGameLayer::update`, `PlayLayer::resetLevel` / `onQuit`, pause-edge detection) and from `BenchmarkUI`. | Verified transient override for both modes, re-checked every 16th frame; stalls → `gap_events`, paused frames → `paused_ms`, both excluded from the window; idempotent finalize that always clears the override **before** persisting; persist failure reported honestly with one retry under a fresh id; terminal state derived from the data. | `testBenchmarkControllerCompletesAndRestoresConfiguration` + `…ExcludesPausesAndStalls` + `…LevelResetHonoursTheSetting` + `…VerifiesItsOwnOverride` + `…ReportsPersistFailureHonestly`. | Standalone (`Linux`, `Win64`), Geode (`Win64`, `Android32`, `Android64`) | `ctest` pass. **Live in-game run `[NOT RUN]`.** |
 | **`BenchmarkCompare`** (`src/benchmark/BenchmarkCompare.*`) | `VERIFIED` | New in beta.3. A/B comparison in the popup and in exported text. | Blocks instead of concluding on: no samples, non-comparable state, same mode twice, platform/architecture mismatch, level mismatch, duration Δ > 25 %, overlapping capture windows. Warns (non-blocking) on duration Δ > 10 % and on every integrity warning. Relative change from a zero baseline is reported as undefined with a note. `significanceClaimed` is `false` by construction. | `testBenchmarkCompareDirectionAndNoiseThreshold` + `…RefusesIncompatibleSessions` + `…NeverDividesByZero`. | Standalone (`Linux`, `Win64`), Geode (`Win64`, `Android32`, `Android64`) | `ctest` pass. |
 | **`BenchmarkPanel`** (`src/ui/BenchmarkPanel.*`) | `VERIFIED` | New in beta.3. All user-facing text, including the HUD label and the CapFrameX procedure. | Platform-agnostic; approximated percentiles are rendered with a `~`; the baseline view states that it is an internal control, not vanilla GD. | `testBenchmarkPanelTextAndPagination`. | Standalone (`Linux`, `Win64`), Geode (`Win64`, `Android32`, `Android64`) | `ctest` pass. |
-| **`BenchmarkUI`** (`src/geode/BenchmarkUI.*`) | `PARTIAL` | New in beta.3. `geode::Popup` (460×296, six views), the `PauseLayer::customSetup()` button, the runtime bridge, notifications. | The only place allowed to call `setLiveGameRuntime(true)`, i.e. the only code that can make a record claim `[MEASURED-IN-GAME]`. | Not unit-testable: needs the Geode loader and a game process. API usage checked by hand against the pinned GD `2.2081` bindings and the Geode `v5.10.1` SDK source. | Geode (`Win64`, `Android32`, `Android64`) — compiled by CI only | **Compilation `[PENDING CI]`; in-game behaviour `[NOT RUN]`.** |
-| **`Hooks.cpp` benchmark integration** (`src/geode/Hooks.cpp`) | `PARTIAL` | `GJBaseGameLayer::update` drives the session; `PlayLayer` gate, pause-edge detection, HUD label, terminal-state notification; `PauseLayer::customSetup()` button; two setting listeners. | Telemetry and benchmark frames are gated on an active `PlayLayer`, so `LevelEditorLayer` frames are not gameplay. The frame delta is the raw monotonic interval, never GD's clamped `dt`. | Not unit-testable locally (Geode-only translation unit). | Geode (`Win64`, `Android32`, `Android64`) — compiled by CI only | **Compilation `[PENDING CI]`; in-game behaviour `[NOT RUN]`.** |
+| **`BenchmarkUI`** (`src/geode/BenchmarkUI.*`) | `PARTIAL` | New in beta.3. `geode::Popup` (460×296, six views), the `PauseLayer::customSetup()` button, the runtime bridge, notifications. | The only place allowed to call `setLiveGameRuntime(true)`, i.e. the only code that can make a record claim `[MEASURED-IN-GAME]`. | Not unit-testable: needs the Geode loader and a game process. API usage checked by hand against the pinned GD `2.2081` bindings and the Geode `v5.10.1` SDK source. | Geode (`Win64`, `Android32`, `Android64`) — compiled by CI only | **Compilation `[VERIFIED]` on all three targets (CI run `38108365707`, commit `edc0048`) after defect V — the `cocos2d::CCMenuItemSpriteExtra` qualification — was fixed; the first run failed all three (§9.1). In-game behaviour `[NOT RUN]`.** |
+| **`Hooks.cpp` benchmark integration** (`src/geode/Hooks.cpp`) | `PARTIAL` | `GJBaseGameLayer::update` drives the session; `PlayLayer` gate, pause-edge detection, HUD label, terminal-state notification; `PauseLayer::customSetup()` button; two setting listeners. | Telemetry and benchmark frames are gated on an active `PlayLayer`, so `LevelEditorLayer` frames are not gameplay. The frame delta is the raw monotonic interval, never GD's clamped `dt`. | Not unit-testable locally (Geode-only translation unit). | Geode (`Win64`, `Android32`, `Android64`) — compiled by CI only | **Compilation `[VERIFIED]` on all three targets (CI run `38108365707`, commit `edc0048`); in-game behaviour `[NOT RUN]`.** |
 
 ---
 
@@ -362,13 +362,78 @@ Test inventory (**50**). Pre-existing (9): `testMemoryArena`, `testSpatialHash`,
 
 ### 9.1 `v0.1.0-beta.3` — this release
 
-**Status at the time of writing: `[PENDING]`.** The beta.3 work is pushed to
-`arena/f6290987-optigd` and the workflow run is recorded below as soon as it
-finishes. Nothing in this section is asserted before the run is observed; a job that
-fails is reported as a failure, and `src/geode/*` — which cannot be compiled in this
-sandbox at all — is verified only here.
+**Status: `[VERIFIED]` on the second attempt.** beta.3 needed two CI runs and both are
+recorded here, because the first one failed and the failure is part of this release's
+history. `src/geode/*` cannot be compiled in the sandbox this release was built in (no
+Android NDK, no clang 19, no C++23 toolchain, no Geometry Dash binary), so CI is the
+only compile verification those two translation units have ever had.
 
-CI_RUN_PLACEHOLDER
+#### Run 1 — commit `4c686ef`: **FAILED** (3 of 6 jobs)
+
+Workflow `Build & Verify OptiGD`, runs `38107167242` (push event) and `38107240434`
+(pull-request event); both produced identical results.
+
+| CI Job | Job ID | Status |
+|---|---|---|
+| `Core Engine Tests & Benchmarks (ubuntu-latest)` | `114375009286` | PASSED |
+| `Core Engine Tests & Benchmarks (windows-latest)` | `114375009257` | PASSED |
+| `Geode Mod (Windows x64)` | `114375270323` | **FAILED** |
+| `Geode Mod (Android64 (arm64-v8a))` | `114375270226` | **FAILED** |
+| `Geode Mod (Android32 (armeabi-v7a))` | `114375270262` | **FAILED** |
+| `Package Combined .geode Artifact` | `114375720037` | skipped (dependency failed) |
+
+**Cause (defect V, introduced by beta.3 and found by CI).** `src/geode/BenchmarkUI.hpp`
+declared the popup's button map as `std::map<Btn, cocos2d::CCMenuItemSpriteExtra*>`.
+`CCMenuItemSpriteExtra` is a *Geometry Dash* class that the generated bindings declare in
+the **global** namespace (`class CCMenuItemSpriteExtra : public
+cocos2d::CCMenuItemSprite`), so the qualified name does not exist. The declaration failed
+to parse inside the class body, which invalidated the whole `BenchmarkPopup` definition
+and cascaded into 13 errors across the only two files the Geode target compiles and the
+standalone jobs do not (`BenchmarkUI.cpp`: 10, `Hooks.cpp`: 3). Every core source —
+including all nine new beta.3 translation units — compiled cleanly for Android64 under
+clang/C++23/LTO before the build reached those two files.
+
+**How the cause was established, since the logs were not readable.** The runner logs for
+those jobs are not retrievable from this environment: `GET /actions/jobs/{id}/logs`
+redirects to `productionresultssa8.blob.core.windows.net`, outside the network allowlist,
+and the check-run annotations carry only `Process completed with exit code 1`. A
+temporary workflow (`.github/workflows/geode-diagnose.yml`, commit `8a3927a`) therefore
+replayed `geode-sdk/build-geode-mod@main`'s own configure and build commands — copied
+from its `action.yml` at `a0f7676e`, same NDK toolchain file, same clang, same
+`-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON` — captured stdout/stderr to a file, and posted
+the filtered compiler output as a comment on PR #7, which *is* readable through the API.
+That run reproduced the failure exactly and named the line. The temporary workflow was
+deleted in the commit that records this section; it never gated anything. Full narrative
+in `DESIGN_LOG.md` §6.12.
+
+#### Run 2 — commit `edc0048` (the fix): **ALL 6 JOBS PASSED**
+
+Workflow `Build & Verify OptiGD`, runs `38108365707` (push event) and `38108363696`
+(pull-request event). Both are green; the push run is tabulated.
+
+| CI Job | Job ID | Runner / Toolchain | Target | Verification Checks | Status |
+|---|---|---|---|---|---|
+| `Core Engine Tests & Benchmarks (ubuntu-latest)` | `114378570355` | Ubuntu Linux x86_64 (GCC, C++20) | Standalone engine | `ctest` 6/6 suites (50/50 unit tests), `optigd_benchmark`, `jq -e '.optigd_version == "0.1.0-beta.3"'`, `jq -e '.evidence_classification == "[SIMULATED]"'`, `tools/generate_report.py` | **PASSED (`[VERIFIED]`)** |
+| `Core Engine Tests & Benchmarks (windows-latest)` | `114378570482` | Windows Server x64 (MSVC, C++20) | Standalone engine | as above | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Windows x64)` | `114378862760` | Windows Server x64, `clang++` MSVC ABI + Geode SDK `5.10.1`, C++23 | `Win64` | `coderunknow.optigd.dll` present in the archive; `jq -e '.version == "v0.1.0-beta.3"'`; `jq -e '.id == "coderunknow.optigd"'` | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android64 (arm64-v8a))` | `114378862767` | Ubuntu + Android NDK `29.0.14206865` clang (`aarch64-none-linux-android23`), `-flto=thin` | `Android64` | `coderunknow.optigd.android64.so` present; same two `jq -e` gates | **PASSED (`[VERIFIED]`)** |
+| `Geode Mod (Android32 (armeabi-v7a))` | `114378862722` | Ubuntu + Android NDK `29.0.14206865` clang (`armv7a-linux-androideabi23`) | `Android32` | `coderunknow.optigd.android32.so` present; same two `jq -e` gates | **PASSED (`[VERIFIED]`)** |
+| `Package Combined .geode Artifact` | `114379175513` | Ubuntu + `geode-sdk/build-geode-mod/combine` | Multi-platform `.geode` | Combined `coderunknow.optigd.geode` (**1,037,855 bytes**, artifact `coderunknow.optigd-geode-package`) contains all three binaries and a `mod.json` whose `.version` is `v0.1.0-beta.3` | **PASSED (`[VERIFIED]`)** |
+
+The `jq -e` assertions are hard gates, so the shipped archive is *proven* to declare
+`v0.1.0-beta.3` — the version-grammar half of criterion 9 checked at packaging level,
+independently of `tools/validate_geode_metadata.py`. No build target was removed or
+disabled to obtain this green run: the only change between run 1 and run 2 is one type
+qualification and one `override` keyword in `src/geode/BenchmarkUI.hpp`, and beta.3 still
+adds `BenchmarkUI.cpp` to the Geode library plus nine new core translation units and two
+new ctest checks relative to beta.2.
+
+**What this does and does not prove.** These jobs compile, link and package. They never
+execute the mod: no Geometry Dash 2.2081 binary, no Geode loader, no GPU and no Android
+device exist in CI or in the build sandbox, so nothing here demonstrates that Benchmark
+Mode opens, measures or saves anything in the real game. "All 6 CI jobs passed" means
+*builds and packages on three targets*, and it is reported as exactly that everywhere in
+this document.
 
 ### 9.2 `v0.1.0-beta.2` — previous release (history, unchanged)
 
@@ -425,10 +490,10 @@ inspection.
 | 7 | Documented Windows x64 CapFrameX procedure + honest test evidence | **Procedure and tool `VERIFIED`; capture `NOT RUN` / `BLOCKED`** | Procedure in-game (**External**) and in `docs/BENCHMARKS.md` §3; `tools/compare_capframex.py` self-tested (ctest). No Windows host, GPU or CapFrameX binary here, so **no external numbers exist** and the CSV fixtures are synthetic. |
 | 8 | Discovered bugs investigated, fixed and tested | **`VERIFIED`** | Defects A–U in `DESIGN_LOG.md` §6.3 and §6.7, each with file, root cause, fix and a named regression test. |
 | 9 | Version metadata satisfies Geode's `v0.1.0-beta.3` grammar | **`VERIFIED`** | `tools/validate_geode_metadata.py` (ctest) + `testGeodeVersionMetadataGrammar` + the ported `VersionInfo::parse`; the dot before `3` is mandatory and `v0.1.0-beta3` is asserted rejected. |
-| 10 | Win64 / Android64 / Android32 builds still validated | **`[PENDING CI]`** | Cannot be compiled locally (no Geode SDK/CLI/bindgen reachable). CI is the only path; the run is recorded in §9.1. No target was removed to get a passing build. |
+| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only** | CI run `38108365707` (commit `edc0048`): all three Geode targets compiled, linked and packaged, and the combined `.geode` (1,037,855 bytes) carries all three binaries. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V; both runs are recorded in §9.1. Nothing was executed in game, and no target was removed or disabled to get the green run. |
 | 11 | Docs and `DESIGN_LOG.md` accurate | **`VERIFIED`** | `README.md`, `CHANGELOG.md`, `docs/{ARCHITECTURE,BENCHMARKS,RELEASE_WORKFLOW}.md`, this report; `DESIGN_LOG.md` Entry 6 extended (§6.6–§6.10) without editing earlier entries. `AGENT.md` untouched: no governance change was needed, and the standing instruction is to ask first. |
 | 12 | Actual results reported; anything not run marked `NOT RUN` / `BLOCKED` | **`VERIFIED`** | This report, `CHANGELOG.md` Notes, `DESIGN_LOG.md` §6.9–§6.10 and `docs/BENCHMARKS.md` all carry the same tags. |
-| 13 | No fabricated measurements, FPS gains, benchmark outputs or CI results | **`VERIFIED`** | Every artifact from a standalone binary is stamped `[SIMULATED]` and the code cannot stamp it otherwise (§4.4); the emitted "50.00 → 62.50 FPS" is a declared fixture; CI status is read from the API and reported as pending until observed. |
+| 13 | No fabricated measurements, FPS gains, benchmark outputs or CI results | **`VERIFIED`** | Every artifact from a standalone binary is stamped `[SIMULATED]` and the code cannot stamp it otherwise (§4.4); the emitted "50.00 → 62.50 FPS" is a declared fixture; CI status is read from the GitHub API, and §9.1 reports the failed run as a failure with its cause rather than presenting only the green one. |
 
 ### 10.2 Claims
 
@@ -444,8 +509,8 @@ inspection.
 | Prior benchmark evidence is never overwritten or pruned | **PASS** (`[VERIFIED]`) |
 | Benchmark Mode fabricates gameplay, forces completion, automates input or alters physics | **NO** — it does none of these, by construction and by test |
 | OptiGD sends telemetry anywhere | **NO** — no network code exists in `src/`; all records are local files |
-| `mod.json` in the shipped archive declares `v0.1.0-beta.3` | **`[PENDING CI]`** — asserted by CI's `jq -e` gates (§9.1) |
-| Multi-platform `.geode` builds (Win64 / Android32 / Android64) still succeed | **`[PENDING CI]`** (§9.1) |
+| `mod.json` in the shipped archive declares `v0.1.0-beta.3` | **PASS** (`[VERIFIED]` by CI's hard `jq -e` gates on all three platform archives and the combined archive, run `38108365707`; §9.1) |
+| Multi-platform `.geode` builds (Win64 / Android32 / Android64) still succeed | **PASS** (`[VERIFIED]` by CI, run `38108365707`, after defect V was fixed; §9.1). Compile + package only — never loaded by Geode. |
 | The mod loads and runs inside a real Geometry Dash `2.2081` client | **BLOCKED** — no GD binary, GPU context, or Geode loader in this environment |
 | Benchmark Mode works on screen in a real game (button placement, popup layout, HUD) | **NOT RUN** — derived from the pinned bindings and SDK source; never rendered |
 | Any improvement in live in-game frame rate | **NOT CLAIMED / UNVERIFIED** — no in-game capture and no external capture exist. **That the benchmark system works is not evidence that OptiGD improves FPS**, and nothing here should be read as implying it. |

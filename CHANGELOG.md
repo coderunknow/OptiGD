@@ -48,6 +48,7 @@ No live-game performance claim is made or implied by any of this: the benchmark 
 
 ### Notes
 - Live in-game Benchmark Mode runs, live frame-time captures, and the CapFrameX external procedure remain **`[NOT RUN] / [BLOCKED]`**: this environment has no Geometry Dash binary, no GPU/display, no Geode loader, no Windows host and no Android device. `src/geode/*` compiles only in CI.
+- beta.3's CI history is part of the record, not just its green run. The first push (`4c686ef`, run `38107167242`) **failed all three Geode jobs**: `src/geode/BenchmarkUI.hpp` qualified `CCMenuItemSpriteExtra` with `cocos2d::`, but that Geometry Dash class is declared in the global namespace by the generated bindings, and the resulting parse error invalidated the whole `BenchmarkPopup` class (13 cascade errors across the two Geode-only translation units). Both standalone jobs passed throughout. Fixed in `edc0048`; run `38108365707` then passed **all 6 jobs** and packaged a combined `coderunknow.optigd.geode` of 1,037,855 bytes whose `mod.json` declares `v0.1.0-beta.3`. Runs are tabulated in `EVIDENCE_REPORT.md` §9.1; the diagnosis, including how the compiler output was obtained while the runner logs were unreachable, is `DESIGN_LOG.md` §6.12. A green Geode job means *compiles, links and packages* — no `.geode` from this repository has ever been loaded by Geode.
 - No merge, no release tag and no official release were performed for beta.3.
 - Stale Draft PR #4 (`arena/21ca20f2-optigd`) is untouched and superseded by merged PRs #5 and #6.
 
