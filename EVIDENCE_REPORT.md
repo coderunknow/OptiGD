@@ -340,6 +340,7 @@ All executed in this environment on the standalone engine build (Linux x86_64, G
 | Full suite | `ctest --test-dir build --output-on-failure` | **PASS** — 8/8 |
 | Compiler warnings | `-Wall -Wextra -Wpedantic` | **Clean** — zero warnings across all four standalone targets |
 | Address + UB sanitizers | `cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"`, then `ctest` + both binaries | **PASS** — 51/51 tests, 8/8 ctest, `optigd_benchmark` completed; no ASan/UBSan findings, no leaks |
+| CI staging step, dry-run | the `Stage Package For The Publishing Job` `run:` script against a stand-in build output | **PASS** — exit 0, the SHA-256 of the original and of the staged copy printed and equal; an archive missing its declared binary exits 1 |
 | CI publishing steps, dry-run + mutation test | all four `Prepare Named Package` `run:` scripts extracted from `build.yml` and executed against stand-in source artefacts, then 6 mutations of the Win64 one | **PASS** — all four exit 0 with the correct file names, `SHA256SUMS.txt` and `INSTALL.txt`; **6/6 mutations detected** (foreign `.so`, missing `.dll`, two `.geode` files, none, inner `mod.json` with another version, another id), each exit 1 with a specific message. A dry run of the *scripts*, not of the Geode build: no `.geode` can be produced here. |
 | A superseded CI step, dry-run | the combined-package step as first written, in a directory holding only the archive — the condition the real combine job runs in | **FAIL by design** — exit 2 with `jq: error: Could not open file mod.json`. A real latent defect (that job has no checkout), but **not** the cause of the CI failures, which was the upstream combine action itself (§9.1, Runs 4–5). |
 | Workflow structure | `yaml.safe_load` over `build.yml`, job graph and per-job step lists printed; the upstream `combine/action.yml` and `action.yml` read through `api.github.com` | **PASS** — parses; graph is `standalone → build-geode-mod → combine → publish-installable-packages → verify-published-artifacts`; the upstream action's `find … -name '*.geode'` glob and its `delete-artifacts` input are confirmed in its source rather than assumed |
@@ -451,7 +452,7 @@ standalone JSON artefacts. `mergeable_state` was `unstable` solely because of th
 `Kilo Code Review` check (`action_required`, insufficient credits), which is not a job of
 this repository's workflow.
 
-#### Runs 4 and 5 — commits `3587076` and `f3952b2` (the handoff pass): **all builds green, `combine` FAILED twice**
+#### Runs 4, 5 and 6 — commits `3587076`, `f3952b2`, `1775194` (the handoff pass): **all builds green; `combine` failed twice, then passed**
 
 Runs `38207332745` / `38207336767` (commit `3587076`) and `38208852829` / `38208855985`
 (commit `f3952b2`). In all four, both standalone jobs and **all three Geode target jobs
@@ -496,6 +497,21 @@ The lesson that generalizes is in `DESIGN_LOG.md` §7.10: a dry run of one step 
 another job's action does with the artefacts a run contains, so before a step publishes
 anything, read what else in the run consumes artefacts by globbing.
 
+**Run 6 — commit `1775194`, runs `38211200450` / `38211204184` — tested that fix and found the
+next problem.** Both standalone jobs, all three Geode target jobs and **`Package Combined .geode
+Artifact` passed**, the first time the combine job had passed since the handoff work began, and
+the combined leg of the new publishing job uploaded `OptiGD-v0.1.0-beta.3-combined-1775194`
+(1,042,702 bytes) after checking the archive's binaries and its inner `mod.json`. The three
+platform legs failed at `Download Source Artefact`, with the annotation naming the cause:
+`Unable to download artifact(s): Artifact not found for name: geode-build-win`. That commit
+passed `delete-artifacts: false` to the combine action on the strength of its documented input;
+the action gates the deletion on `if: ${{ inputs.delete-artifacts }}`, composite inputs are
+strings, and the string `"false"` is truthy, so the artefacts were deleted regardless — the
+run's artefact list confirms none remained. The fix is a staged copy: each build job uploads its
+own archive a second time as `optigd-source-<target>` under a `.bin` file name that the upstream
+`find … -name '*.geode'` glob does not match, and the publishing job renames it back after
+re-verifying it. The inert input is no longer passed.
+
 Also confirmed on these runs rather than assumed: `pull_request`-triggered runs build GitHub's
 merge-preview commit, so their artefacts carry that commit's short SHA (`-49490f1` on run
 `38207336767`), not the head's. The artefact matching the head commit exactly comes from the
@@ -505,8 +521,9 @@ merge-preview commit, so their artefacts carry that commit's short SHA (`-49490f
 
 `publish-installable-packages` runs after `combine` with four matrix legs — Win64, Android64,
 Android32 and combined. Each leg downloads the artefact that already holds that platform's
-archive (`geode-build-win`, `geode-build-android64`, `geode-build-android32`,
-`coderunknow.optigd-geode-package`), proves it is the platform it is about to be named for
+archive (the staged `optigd-source-Win64` / `-Android64` / `-Android32` copies, and
+`coderunknow.optigd-geode-package` for the combined one), proves it is the platform it is about
+to be named for
 (exactly one `.geode`; that target's binaries present; every other target's binaries absent;
 the `id` and `version` inside the archive's own `mod.json` matching the repository's), renames
 it to `coderunknow.optigd-<version>-<target>.geode`, writes `SHA256SUMS.txt` and a
@@ -589,7 +606,7 @@ inspection.
 | 7 | Documented Windows x64 CapFrameX procedure + honest test evidence | **Procedure and tool `VERIFIED`; capture `NOT RUN` / `BLOCKED`** | Procedure in-game (**External**) and in `docs/BENCHMARKS.md` §3; `tools/compare_capframex.py` self-tested (ctest). No Windows host, GPU or CapFrameX binary here, so **no external numbers exist** and the CSV fixtures are synthetic. |
 | 8 | Discovered bugs investigated, fixed and tested | **`VERIFIED`** | Defects A–U in `DESIGN_LOG.md` §6.3 and §6.7 and W, X, Y, Z plus the panel-guidance gap in §7.2, each with file, root cause, fix and a named regression test. Defect W additionally has an out-of-process guard (`tools/audit_setting_types.py`, two ctest checks) because it is a disagreement between two files that no unit test can see. |
 | 9 | Version metadata satisfies Geode's `v0.1.0-beta.3` grammar | **`VERIFIED`** | `tools/validate_geode_metadata.py` (ctest) + `testGeodeVersionMetadataGrammar` + the ported `VersionInfo::parse`; the dot before `3` is mandatory and `v0.1.0-beta3` is asserted rejected. |
-| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only, for the runs named in §9.1** | Runs `38108365707` (commit `edc0048`) and `38108968555`/`38108967055` (commit `0327231`): all six jobs green (§9.1, Runs 2 and 3), all three Geode targets compiled, linked and packaged, and the combined `.geode` carries all three binaries with `mod.json` asserting `v0.1.0-beta.3`. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V. Nothing was executed in game, and no target was removed or disabled to get a green run. The handoff-pass commits are Runs 4 and 5 (`3587076`, `f3952b2`): all three Geode targets green both times, `combine` **failed** both times because the new named artefacts fed the upstream combine action's `*.geode` glob — cause, evidence and fix in §9.1. The commit carrying that fix is newer than every run tabulated here, and its own run id, artefact names and SHA-256 values are recorded in the PR conversation, because a file cannot contain the id of the run that the push triggers, and a previous green run does not validate a newer commit. |
+| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only, for the runs named in §9.1** | Runs `38108365707` (commit `edc0048`) and `38108968555`/`38108967055` (commit `0327231`): all six jobs green (§9.1, Runs 2 and 3), all three Geode targets compiled, linked and packaged, and the combined `.geode` carries all three binaries with `mod.json` asserting `v0.1.0-beta.3`. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V. Nothing was executed in game, and no target was removed or disabled to get a green run. The handoff-pass commits are Runs 4–6 (`3587076`, `f3952b2`, `1775194`): all three Geode targets green every time; `combine` **failed** in Runs 4 and 5 because the new named artefacts fed the upstream combine action's `*.geode` glob, and **passed** in Run 6, where the three platform publishing legs then failed on artefacts the upstream action had deleted — causes, evidence and fixes in §9.1. The commit carrying that fix is newer than every run tabulated here, and its own run id, artefact names and SHA-256 values are recorded in the PR conversation, because a file cannot contain the id of the run that the push triggers, and a previous green run does not validate a newer commit. |
 | 11 | Docs and `DESIGN_LOG.md` accurate | **`VERIFIED`** | `README.md`, `CHANGELOG.md`, `docs/{ARCHITECTURE,BENCHMARKS,RELEASE_WORKFLOW}.md`, this report; `DESIGN_LOG.md` Entry 6 extended (§6.6–§6.10) and Entry 7 added for the handoff pass, without editing earlier entries. `AGENT.md` untouched: no governance change was authorized, and the standing instruction is to ask first — the question about its stale `v0.1.0-beta.2` version references was put to the maintainer and is recorded as an open decision in §10.3. |
 | 12 | Actual results reported; anything not run marked `NOT RUN` / `BLOCKED` | **`VERIFIED`** | This report, `CHANGELOG.md` Notes, `DESIGN_LOG.md` §6.9–§6.10 and `docs/BENCHMARKS.md` all carry the same tags. |
 | 13 | No fabricated measurements, FPS gains, benchmark outputs or CI results | **`VERIFIED`** | Every artifact from a standalone binary is stamped `[SIMULATED]` and the code cannot stamp it otherwise (§4.4); the emitted "50.00 → 62.50 FPS" is a declared fixture; CI status is read from the GitHub API, and §9.1 reports the failed run as a failure with its cause rather than presenting only the green one. |

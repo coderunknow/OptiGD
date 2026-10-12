@@ -106,6 +106,38 @@ jobs:
           unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
           unzip -p "$GEODE_FILE" mod.json | jq -e '.id == "coderunknow.optigd"'
 
+      # The named, checksummed package a tester downloads is published by the
+      # `publish-installable-packages` job, which runs AFTER `combine`. That job
+      # needs this archive, but `combine@main` deletes the `geode-build-*`
+      # artefacts it consumes and its `delete-artifacts` input cannot turn that
+      # off (`if: ${{ inputs.delete-artifacts }}` sees the STRING "false", which
+      # is truthy - observed in run 38211200450, where the artefacts were gone).
+      # So a second copy is staged here for the publishing job to pick up.
+      #
+      # The suffix matters: `combine@main` merges every file matching
+      # `find ./artifacts -name '*.geode'` across ALL artefacts in the run and
+      # assumes each one lives in a per-platform build directory. An artefact
+      # carrying a differently named `.geode` makes it call `geode package merge`
+      # with no inputs and fail - that is exactly what broke runs 38207332745 and
+      # 38208852829. `.bin` is not matched by that glob; the publishing job
+      # renames the file back and re-verifies the archive before it ships.
+      - name: Stage Package For The Publishing Job
+        shell: bash
+        run: |
+          set -euo pipefail
+          GEODE_FILE="${{ steps.build.outputs.build-output }}/coderunknow.optigd.geode"
+          mkdir -p stage
+          cp "$GEODE_FILE" stage/coderunknow.optigd.package.bin
+          unzip -l stage/coderunknow.optigd.package.bin | grep -qF " ${{ matrix.expected_bin }}"
+          sha256sum "$GEODE_FILE" stage/coderunknow.optigd.package.bin
+
+      - name: Upload Staged Package (${{ matrix.target }})
+        uses: actions/upload-artifact@v7
+        with:
+          name: optigd-source-${{ matrix.target }}
+          path: stage/coderunknow.optigd.package.bin
+          if-no-files-found: error
+
   # ==========================================================================
   # Job 3: Combine Multi-Platform .geode Package & Verify Combined Archive
   # ==========================================================================
@@ -117,13 +149,12 @@ jobs:
       - name: Combine Platform Binaries
         id: combine
         uses: geode-sdk/build-geode-mod/combine@main
-        with:
-          # The action's default deletes the per-platform `geode-build-*`
-          # artefacts once it has merged them. They are kept here because the
-          # `publish-installable-packages` job turns each one into the named,
-          # checksummed package a tester downloads: publishing them from the
-          # build jobs instead is what broke this job (see DESIGN_LOG.md §7.10).
-          delete-artifacts: false
+        # No `delete-artifacts: false` here, even though the action documents
+        # that input: it gates the deletion on `if: ${{ inputs.delete-artifacts }}`,
+        # and a composite action's inputs are strings, so "false" is truthy and the
+        # `geode-build-*` artefacts are deleted anyway (run 38211200450). The
+        # publishing job therefore reads the staged `optigd-source-*` copies the
+        # build jobs upload instead - see DESIGN_LOG.md §7.8.
 
       - name: Verify Combined Multi-Platform .geode Archive
         shell: bash
@@ -166,22 +197,26 @@ jobs:
       matrix:
         include:
           - label: Windows x64
-            source: geode-build-win
+            source: optigd-source-Win64
+            source_glob: '*.bin'
             target: Win64
             required_bins: coderunknow.optigd.dll
             forbidden_bins: coderunknow.optigd.android64.so coderunknow.optigd.android32.so
           - label: Android64
-            source: geode-build-android64
+            source: optigd-source-Android64
+            source_glob: '*.bin'
             target: Android64
             required_bins: coderunknow.optigd.android64.so
             forbidden_bins: coderunknow.optigd.dll coderunknow.optigd.android32.so
           - label: Android32
-            source: geode-build-android32
+            source: optigd-source-Android32
+            source_glob: '*.bin'
             target: Android32
             required_bins: coderunknow.optigd.android32.so
             forbidden_bins: coderunknow.optigd.dll coderunknow.optigd.android64.so
           - label: Combined
             source: coderunknow.optigd-geode-package
+            source_glob: '*.geode'
             target: combined
             required_bins: coderunknow.optigd.dll coderunknow.optigd.android64.so coderunknow.optigd.android32.so
             forbidden_bins: ""
@@ -208,14 +243,17 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           PKG_NAME="coderunknow.optigd-${VERSION}-${TARGET}.geode"
 
-          found=$(find source -name '*.geode' -type f | sort)
+          # Platform legs read the staged copy (`*.bin`, see the build job); the
+          # combined leg reads the archive the combine job published (`*.geode`).
+          found=$(find source -name '${{ matrix.source_glob }}' -type f | sort)
           count=$(printf '%s\n' "$found" | grep -c . || true)
           if [ "$count" != "1" ]; then
-            echo "ERROR: expected exactly one .geode in ${{ matrix.source }}, found $count"
+            echo "ERROR: expected exactly one ${{ matrix.source_glob }} file in ${{ matrix.source }}, found $count"
             printf '%s\n' "$found"
             exit 1
           fi
           SRC="$found"
+          echo "source archive: $SRC ($(wc -c < "$SRC" | tr -d '[:space:]') bytes)"
 
           # Prove the archive really is the platform it is about to be named for.
           listing=$(unzip -l "$SRC")
@@ -320,6 +358,7 @@ jobs:
           echo "| File | \`${PKG_NAME}\` |"
           echo "| Version | \`${VERSION}\` |"
           echo "| Source artefact | \`${{ matrix.source }}\` |"
+          echo "| Source file | \`$(basename "$SRC")\` |"
           echo "| Commit | \`${GITHUB_SHA}\` |"
           echo "| Run | \`${GITHUB_RUN_ID}\` |"
           echo "| Size | ${SIZE_BYTES} bytes |"
