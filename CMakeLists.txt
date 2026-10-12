@@ -132,6 +132,24 @@ else()
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_capframex.py --self-test)
     endif()
 
+    # Geode setting-type audit. `Mod::getSettingValue<T>` resolves
+    # `SettingTypeForValueType<T>` and casts to the setting object; when the cast
+    # fails it returns a default-constructed `T` with no error and no log line,
+    # and `listenForSettingChanges<T>` with the same mismatch simply never fires.
+    # beta.3 shipped `benchmark-duration-seconds` ("type": "int") read as a
+    # `double`, so the setting was inert and every capture used the built-in
+    # default. The audit cross-checks every call site against mod.json, and its
+    # own self-test proves it fails on that exact defect.
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME OptiGDSettingTypeAudit
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_setting_types.py)
+
+        add_test(NAME OptiGDSettingTypeAuditSelfTest
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_setting_types.py --self-test)
+    endif()
+
     # Benchmark Harness
     add_executable(optigd_benchmark benchmarks/main.cpp)
     target_link_libraries(optigd_benchmark PRIVATE optigd_core)

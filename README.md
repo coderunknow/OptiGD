@@ -15,7 +15,7 @@ OptiGD targets the primary CPU and memory bottlenecks in high-object Geometry Da
 
 OptiGD `v0.1.0-beta.3` is a release candidate. Every optimization claim in this repository is labeled with its verification status (see [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md) for the complete module-by-module audit):
 
-- **`[VERIFIED]`**: Core C++20 engine (`MemoryArena`, `SpatialHash`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, `MatrixCache`, `AdaptiveGovernor`, `FallbackManager`, `ConfigManager`, `CompatibilityLayer`, `DiagnosticsEngine`, `SampleWindow`, `JsonValue`, and the whole of Benchmark Mode) passes 100% of unit and integration tests (**50 test functions**, `ctest` **6/6**) and compiles into verified `.geode` binaries for **Windows x64**, **Android64**, and **Android32** using Geode SDK `v5.10.1`.
+- **`[VERIFIED]`**: Core C++20 engine (`MemoryArena`, `SpatialHash`, `VisibilityCuller`, `ParticleGovernor`, `TriggerOptimizer`, `MatrixCache`, `AdaptiveGovernor`, `FallbackManager`, `ConfigManager`, `CompatibilityLayer`, `DiagnosticsEngine`, `SampleWindow`, `JsonValue`, and the whole of Benchmark Mode) passes 100% of unit and integration tests (**51 test functions**, `ctest` **8/8**) and compiles into verified `.geode` binaries for **Windows x64**, **Android64**, and **Android32** using Geode SDK `v5.10.1`.
 - **`[VERIFIED]`**: `v0.1.0-beta.3` satisfies Geode's version grammar (`v0.1.0-beta.3`, dot before the `3` — `v0.1.0-beta3` is rejected). The root cause of the earlier loader defect and its evidence chain are in [`EVIDENCE_REPORT.md`](EVIDENCE_REPORT.md#root-cause-analysis-rca).
 - **`[SIMULATED]`**: Synthetic stress benchmarks (`optigd_benchmark`) demonstrate **4.19x – 5.45x** CPU reduction in standalone 4k–60k object simulation loops, with per-frame heap allocations driven to **0**. Those numbers were captured for beta.2 and are not re-run for beta.3; they are not Geometry Dash frame times.
 - **`[MEASURED-IN-GAME]` — mechanism only**: Benchmark Mode is implemented end to end (in-game entry point, transient baseline/optimized configuration, session records, comparison, export) and its record format is validated out of process. The sessions in this repository were produced by the real controller with a **synthetic clock and no game process**, so they are stamped `[SIMULATED]`.
@@ -92,7 +92,7 @@ Telemetry is gated on an active `PlayLayer`: `GJBaseGameLayer` is also the base 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON
 cmake --build build --config Release --parallel
-ctest --test-dir build --output-on-failure --verbose      # 6 checks, 50 test functions
+ctest --test-dir build --output-on-failure --verbose      # 8 checks, 51 test functions
 ./build/optigd_benchmark benchmark_results.json
 python3 tools/generate_report.py benchmark_results.json
 ```
@@ -105,6 +105,7 @@ python3 tools/validate_benchmark_json.py         build/benchmark_results.json
 ./build/optigd_tests --emit-sessions             build/benchmark_sessions
 python3 tools/validate_benchmark_session_json.py build/benchmark_sessions
 python3 tools/compare_capframex.py --self-test
+python3 tools/audit_setting_types.py                # mod.json types vs. getSettingValue<T> call sites
 ```
 
 ### 2. Building the Geode Mod (`coderunknow.optigd.geode`)

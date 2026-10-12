@@ -106,6 +106,117 @@ jobs:
           unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
           unzip -p "$GEODE_FILE" mod.json | jq -e '.id == "coderunknow.optigd"'
 
+      # Publishes the exact package a tester installs, named with the platform, the
+      # mod version and the commit it was built from, plus its SHA-256 so a
+      # downloaded file can be matched to this run. This step changes nothing about
+      # what is built: it re-packages the artefact the action already produced and
+      # the step above already verified.
+      - name: Prepare Installable Package For Download
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          GEODE_FILE="${{ steps.build.outputs.build-output }}/coderunknow.optigd.geode"
+          VERSION=$(jq -r '.version' mod.json)
+          GEODE_REQ=$(jq -r '.geode' mod.json)
+          TARGET="${{ matrix.target }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          PKG_NAME="coderunknow.optigd-${VERSION}-${TARGET}.geode"
+
+          mkdir -p dist
+          cp "$GEODE_FILE" "dist/${PKG_NAME}"
+          (cd dist && sha256sum "${PKG_NAME}" > SHA256SUMS.txt)
+          CHECKSUM=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          SIZE_BYTES=$(wc -c < "dist/${PKG_NAME}" | tr -d '[:space:]')
+
+          if [ "$TARGET" = "Win64" ]; then
+          INSTALL_STEPS="  1. Make sure Geode is already installed and Geometry Dash starts with the
+               Geode loader (a Geode button appears in the game's main menu).
+            2. In the game, open Geode -> Mods and use the folder button there to open
+               the mods directory. That is the authoritative location on your machine -
+               do not assume a Steam install path. Equivalently, it is the
+               \"geode/mods\" folder inside your Geometry Dash installation.
+            3. Copy ${PKG_NAME} into that folder.
+            4. Restart Geometry Dash. OptiGD should be listed in Geode -> Mods with
+               version ${VERSION}."
+          else
+          INSTALL_STEPS="  1. Make sure Geode is already installed for Geometry Dash on this device.
+            2. Open the Geode app (or the in-game Geode menu) -> Mods, and use its
+               folder/browse option to reach the mods directory. On Android that is
+               normally Android/data/com.robtopx.geometryjump/geode/mods - reach it
+               through Geode rather than assuming a path.
+            3. Copy ${PKG_NAME} into that folder.
+            4. Restart Geometry Dash and check Geode -> Mods for OptiGD ${VERSION}."
+          fi
+
+          cat > dist/INSTALL.txt <<TXT
+          OptiGD ${VERSION} - Geode mod package for ${TARGET}
+
+          Built from commit ${GITHUB_SHA}
+          GitHub Actions run ${GITHUB_RUN_ID} (job ${{ matrix.name }})
+          File        : ${PKG_NAME}
+          Size        : ${SIZE_BYTES} bytes
+          SHA-256     : ${CHECKSUM}
+          Requires    : Geode ${GEODE_REQ} and the Geometry Dash version mod.json targets
+
+          WHAT THIS IS
+            A Geode mod package. It is not a standalone program, it does not replace any
+            game file, and it does nothing until Geode loads it.
+
+          HOW TO INSTALL
+          ${INSTALL_STEPS}
+
+          HOW TO CHECK THE FILE YOU DOWNLOADED
+            Windows PowerShell : Get-FileHash -Algorithm SHA256 ${PKG_NAME}
+            Linux / macOS      : sha256sum ${PKG_NAME}
+            The value must equal the SHA-256 above.
+
+          IF IT DOES NOT LOAD, OR SOMETHING LOOKS WRONG
+            Open the Geode log (in-game Geode -> Logs, or geode.log next to the game
+            executable) and look for lines containing "coderunknow.optigd". When
+            reporting a problem, include those lines, the OptiGD version, the Geode
+            version and, for Benchmark Mode, the session files under
+            <mods folder>/coderunknow.optigd/benchmarks/.
+          TXT
+
+          {
+          echo "### Installable package - ${TARGET}"
+          echo ""
+          echo "| Field | Value |"
+          echo "| --- | --- |"
+          echo "| Artifact | \`OptiGD-${VERSION}-${TARGET}-${SHORT_SHA}\` |"
+          echo "| File | \`${PKG_NAME}\` |"
+          echo "| Version | \`${VERSION}\` |"
+          echo "| Target | \`${TARGET}\` |"
+          echo "| Commit | \`${GITHUB_SHA}\` |"
+          echo "| Run | \`${GITHUB_RUN_ID}\` |"
+          echo "| Size | ${SIZE_BYTES} bytes |"
+          echo "| SHA-256 | \`${CHECKSUM}\` |"
+          echo ""
+          echo "<details><summary>Archive contents</summary>"
+          echo ""
+          echo '```'
+          unzip -l "dist/${PKG_NAME}"
+          echo '```'
+          echo ""
+          echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "artifact_name=OptiGD-${VERSION}-${TARGET}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=${SIZE_BYTES}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Installable Package (${{ matrix.target }})
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            dist/*.geode
+            dist/SHA256SUMS.txt
+            dist/INSTALL.txt
+          if-no-files-found: error
+
   # ==========================================================================
   # Job 3: Combine Multi-Platform .geode Package & Verify Combined Archive
   # ==========================================================================
@@ -133,8 +244,59 @@ jobs:
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android32.so"
           unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
 
+      # Same treatment for the multi-platform package a release would ship: a
+      # name that carries the version and the commit, and a recorded SHA-256.
+      - name: Prepare Combined Package For Download
+        id: combined_package
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMBINED_FILE="${{ steps.combine.outputs.build-output }}/coderunknow.optigd.geode"
+          VERSION=$(jq -r '.version' mod.json)
+          SHORT_SHA="${GITHUB_SHA::7}"
+          PKG_NAME="coderunknow.optigd-${VERSION}-combined.geode"
+
+          mkdir -p dist
+          cp "$COMBINED_FILE" "dist/${PKG_NAME}"
+          (cd dist && sha256sum "${PKG_NAME}" > SHA256SUMS.txt)
+          CHECKSUM=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          SIZE_BYTES=$(wc -c < "dist/${PKG_NAME}" | tr -d '[:space:]')
+
+          {
+          echo "### Installable package - combined (Win64 + Android64 + Android32)"
+          echo ""
+          echo "| Field | Value |"
+          echo "| --- | --- |"
+          echo "| Artifact | \`OptiGD-${VERSION}-combined-${SHORT_SHA}\` |"
+          echo "| File | \`${PKG_NAME}\` |"
+          echo "| Commit | \`${GITHUB_SHA}\` |"
+          echo "| Size | ${SIZE_BYTES} bytes |"
+          echo "| SHA-256 | \`${CHECKSUM}\` |"
+          echo ""
+          echo "<details><summary>Archive contents</summary>"
+          echo ""
+          echo '```'
+          unzip -l "dist/${PKG_NAME}"
+          echo '```'
+          echo ""
+          echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "artifact_name=OptiGD-${VERSION}-combined-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=${SIZE_BYTES}" >> "$GITHUB_OUTPUT"
+
       - name: Upload Combined .geode Mod
         uses: actions/upload-artifact@v7
         with:
           name: coderunknow.optigd-geode-package
           path: ${{ steps.combine.outputs.build-output }}/*.geode
+
+      - name: Upload Named Combined Package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.combined_package.outputs.artifact_name }}
+          path: |
+            dist/*.geode
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

@@ -190,9 +190,24 @@ class $modify(OptiGDBaseGameLayer, GJBaseGameLayer) {
         // `LevelEditorLayer`, so beta.2 folded editor frames into gameplay
         // telemetry. Measurement now runs only for the live PlayLayer.
         auto* playLayer = PlayLayer::get();
+        // beta.3 fix (defect Y): `GJBaseGameLayer::update` keeps running after the
+        // level ends - through the end animation, the completion effects and the
+        // results screen. Those frames are cheap to render, so counting them as
+        // gameplay would inflate avg FPS and pull every percentile down in exactly
+        // the sessions a player is most likely to keep open (a successful run).
+        // GD's own `PlayLayer::canPauseGame()` is
+        // `!m_hasCompletedLevel && !m_levelEndAnimationStarted`, but that
+        // reconstruction is `win inline` only, so the members are read directly to
+        // stay available on Android32/Android64 (both are plain data members:
+        // `m_hasCompletedLevel` on PlayLayer, `m_levelEndAnimationStarted` on
+        // GJBaseGameLayer). The attempt's own intro and death animation frames are
+        // still measured on purpose: the level is being played during those, and
+        // they are symmetric between a baseline and an optimized capture.
         const bool isGameplayFrame =
             (playLayer != nullptr) &&
-            (static_cast<cocos2d::CCNode*>(playLayer) == static_cast<cocos2d::CCNode*>(this));
+            (static_cast<cocos2d::CCNode*>(playLayer) == static_cast<cocos2d::CCNode*>(this)) &&
+            !playLayer->m_hasCompletedLevel &&
+            !playLayer->m_levelEndAnimationStarted;
         if (!isGameplayFrame) {
             GJBaseGameLayer::update(dt);
             return;
@@ -352,9 +367,18 @@ class $modify(OptiGDPlayLayer, PlayLayer) {
         m_fields->benchLabel = cocos2d::CCLabelBMFont::create("", "chatFont.fnt");
         if (m_fields->benchLabel) {
             m_fields->benchLabel->setScale(0.42f);
-            m_fields->benchLabel->setAnchorPoint({1.0f, 1.0f});
-            m_fields->benchLabel->setPosition({benchWinSize.width - 10.0f,
-                                               benchWinSize.height - 10.0f});
+            // beta.3 fix (defect Z): bottom-right, not top-right. GD 2.2's
+            // standard play-layer layout puts the pause button top-right, and this
+            // label is several lines tall at zOrder 9999, so beta.3's first
+            // placement drew straight over the one control a player needs during a
+            // capture. The diagnostics overlay owns the top-left corner and the
+            // progress bar the top centre, which leaves the bottom-right free.
+            // The label never swallows touches (it is not in a menu), so gameplay
+            // input and the pause button keep working regardless - this is about
+            // not hiding them. Placement is derived from GD's UI convention, not
+            // from a rendered frame; it is item 7 of the maintainer smoke test.
+            m_fields->benchLabel->setAnchorPoint({1.0f, 0.0f});
+            m_fields->benchLabel->setPosition({benchWinSize.width - 10.0f, 10.0f});
             m_fields->benchLabel->setZOrder(9999);
             m_fields->benchLabel->setOpacity(225);
             m_fields->benchLabel->setColor({255, 214, 110});

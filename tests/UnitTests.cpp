@@ -2364,6 +2364,147 @@ void testBenchmarkControllerExcludesPausesAndStalls() {
     OPTIGD_PASS();
 }
 
+// beta.3 fix (defect X): the wall-clock ceiling is a runaway guard, not a budget.
+// `applyBenchmarkSettingsToPolicy()` in the Geode layer used to clamp it to
+// `target / 0.9` - about 11 % of slack - which would have finalized an ordinary
+// capture as `incomplete` the first time the player paused, died or hit a loading
+// stall. The rule now lives in the core as
+// `BenchmarkController::recommendedWallClockCeilingMs()` so it can be tested, and
+// this test also covers the ceiling-breach path itself, which had no coverage: it
+// must end the session as `incomplete`, say why, still save the evidence, and
+// still restore the user's effective configuration.
+void testBenchmarkWallClockCeilingIsAGuardNotABudget() {
+    namespace bm = optigd::benchmark;
+    auto& cfgMgr = optigd::config::ConfigManager::instance();
+    auto& controller = bm::BenchmarkController::instance();
+    auto& mgr = optigd::core::OptiGDManager::instance();
+
+    // --- the rule itself ----------------------------------------------------
+    OPTIGD_ASSERT(std::fabs(bm::BenchmarkController::recommendedWallClockCeilingMs(60000.0) -
+                            900000.0) < 1e-9,
+                  "the 60 s default target must get 15 minutes of wall-clock slack");
+    OPTIGD_ASSERT(bm::BenchmarkController::recommendedWallClockCeilingMs(600000.0) >
+                      600000.0 * 3.0,
+                  "the slack must scale with the target instead of staying fixed");
+
+    bm::BenchmarkPolicy policy;
+    policy.targetDurationMs = 60000.0;
+    policy.maxWallClockMs = 1000.0;  // narrower than the target: unusable
+    controller.setPolicy(policy);
+    OPTIGD_ASSERT(std::fabs(controller.getPolicy().maxWallClockMs - 900000.0) < 1e-9,
+                  "a ceiling narrower than the target must be repaired, not accepted");
+
+    policy.maxWallClockMs = 60000.0 * 40.0;  // deliberately wider than the rule
+    controller.setPolicy(policy);
+    OPTIGD_ASSERT(std::fabs(controller.getPolicy().maxWallClockMs - 60000.0 * 40.0) < 1e-9,
+                  "a wider ceiling must be left alone");
+
+    // --- breaching the ceiling ----------------------------------------------
+    const auto userConfig = bench_test::makeUserConfig();
+    cfgMgr.resetToDefaults();
+    cfgMgr.clearRuntimeOverride();
+    cfgMgr.setBaseConfig(userConfig);
+    mgr.reloadConfig();
+
+    const auto root = bench_test::makeScratchDir("ceiling");
+    bench_test::installTestBridge(controller, root, /*targetMs=*/5000.0, /*stopOnReset=*/true);
+    auto tight = controller.getPolicy();
+    // Tight but still >= the target: `setPolicy` repairs a ceiling below the
+    // target (asserted above), so an unusable value cannot be used to test the
+    // breach path. 6 s of wall clock for a 5 s active target leaves one second of
+    // slack, which a single pause blows through.
+    tight.maxWallClockMs = 6000.0;
+    controller.setPolicy(tight);
+    OPTIGD_ASSERT(std::fabs(controller.getPolicy().maxWallClockMs - 6000.0) < 1e-9,
+                  "a ceiling above the target must be accepted as given");
+
+    OPTIGD_ASSERT(controller.startSession(bm::BenchmarkMode::Baseline).ok, "start must succeed");
+    OPTIGD_ASSERT(controller.isOverrideActive(), "a baseline capture must arm the override");
+
+    // Burn wall clock while the game is paused. The active window cannot advance,
+    // which is exactly the runaway case the ceiling exists for.
+    controller.onPauseObserved();
+    int frames = 0;
+    while (controller.isRunning() && frames < 400) {
+        bench_test::clock().advanceMs(16.0);
+        controller.onFrame(bench_test::makeFrame(16000.0));
+        ++frames;
+    }
+
+    const auto* session = controller.getSession();
+    const auto snapshot = controller.getSnapshot();
+    OPTIGD_ASSERT(session != nullptr, "the session must be retained for inspection");
+    OPTIGD_ASSERT(!controller.isRunning(), "the ceiling must end the session");
+    // `finalize()` derives the terminal state from the data rather than trusting
+    // the caller, and a window with no gameplay samples at all is `invalid`, not
+    // `incomplete` (the defect-U rule: `invalid` means "too little data to be a
+    // measurement"). Either way it is not comparable and not completed.
+    OPTIGD_ASSERT(session->state == bm::BenchmarkState::Invalid,
+                  "a ceiling breach with zero gameplay samples must be invalid evidence");
+    OPTIGD_ASSERT(!session->isComparable(), "a breached session must never be comparable");
+    OPTIGD_ASSERT(session->hasWarning(bm::warning::kWallClockDrift),
+                  "the reason must be recorded as wall_clock_exceeds_captured_window");
+    OPTIGD_ASSERT(session->hasWarning(bm::warning::kPaused),
+                  "the paused time that ate the wall clock must be disclosed");
+    OPTIGD_ASSERT(session->framesCounted == 0,
+                  "paused frames must never be counted as gameplay samples");
+    OPTIGD_ASSERT(session->hasWarning(bm::warning::kNoSamples),
+                  "a capture with no gameplay samples must say so");
+    OPTIGD_ASSERT(session->capturedDurationMs < session->targetDurationMs,
+                  "the window must not have reached its target");
+    OPTIGD_ASSERT(session->wallDurationMs > tight.maxWallClockMs,
+                  "the wall clock must actually have exceeded the ceiling");
+    OPTIGD_ASSERT(snapshot.persisted, "incomplete evidence must still be saved");
+    OPTIGD_ASSERT(!controller.isOverrideActive(),
+                  "the override must be cleared on the ceiling path too");
+    OPTIGD_ASSERT(!cfgMgr.hasRuntimeOverride(), "no transient override may survive");
+    OPTIGD_ASSERT(bench_test::sameConfig(mgr.getActiveConfig(), userConfig),
+                  "the user's effective configuration must be restored exactly");
+
+    // --- the same breach after real gameplay was recorded --------------------
+    // This is the case a player actually hits: some seconds were measured, then
+    // the level was left paused (or the game backgrounded) long enough to breach
+    // the ceiling. The evidence is `incomplete`, the shortfall is disclosed, and
+    // the configuration is still restored exactly.
+    OPTIGD_ASSERT(controller.startSession(bm::BenchmarkMode::Optimized).ok,
+                  "a second capture must be startable after a breached one");
+    for (int i = 0; i < 40; ++i) {  // 640 ms of real gameplay, above the 500 ms floor
+        bench_test::clock().advanceMs(16.0);
+        controller.onFrame(bench_test::makeFrame(16000.0));
+    }
+    OPTIGD_ASSERT(controller.isRunning(), "640 ms of a 5 s target must still be running");
+    controller.onPauseObserved();
+    frames = 0;
+    while (controller.isRunning() && frames < 600) {
+        bench_test::clock().advanceMs(16.0);
+        controller.onFrame(bench_test::makeFrame(16000.0));
+        ++frames;
+    }
+    const auto* partial = controller.getSession();
+    OPTIGD_ASSERT(partial != nullptr, "the partial session must be retained");
+    OPTIGD_ASSERT(partial->state == bm::BenchmarkState::Incomplete,
+                  "a breach after real samples is incomplete evidence, not invalid");
+    OPTIGD_ASSERT(partial->framesCounted >= 40, "the recorded gameplay must be kept");
+    OPTIGD_ASSERT(partial->capturedDurationMs >= 500.0,
+                  "the captured window must survive the breach");
+    OPTIGD_ASSERT(partial->hasWarning(bm::warning::kWallClockDrift),
+                  "the breach must be disclosed");
+    OPTIGD_ASSERT(partial->hasWarning(bm::warning::kShortCapture),
+                  "the shortfall against the target must be disclosed");
+    OPTIGD_ASSERT(partial->id != session->id, "the two sessions must have distinct ids");
+    OPTIGD_ASSERT(controller.getSnapshot().persisted, "the partial evidence must be saved");
+    OPTIGD_ASSERT(!controller.isOverrideActive() && !cfgMgr.hasRuntimeOverride(),
+                  "no override may survive the second breach either");
+    OPTIGD_ASSERT(bench_test::sameConfig(mgr.getActiveConfig(), userConfig),
+                  "the user's configuration must still match exactly");
+
+    bench_test::restoreControllerDefaults(controller);
+    cfgMgr.resetToDefaults();
+    mgr.reloadConfig();
+    bench_test::removeScratchDir();
+    OPTIGD_PASS();
+}
+
 void testBenchmarkControllerLevelResetHonoursTheSetting() {
     namespace bm = optigd::benchmark;
     auto& cfgMgr = optigd::config::ConfigManager::instance();
@@ -2956,6 +3097,13 @@ void testBenchmarkPanelTextAndPagination() {
                   "the disclosure must say these are internal inter-frame measurements");
     OPTIGD_ASSERT(main.find("status line") != std::string::npos,
                   "a status message must be rendered");
+    // A capture is normally started from the pause menu, where the window cannot
+    // advance. Without this the panel reads as a countdown that has hung at 0.00 s.
+    OPTIGD_ASSERT(main.find("RESUME") != std::string::npos,
+                  "the running view must tell the player to close the panel and resume");
+    OPTIGD_ASSERT(main.find("only") != std::string::npos &&
+                  main.find("active gameplay") != std::string::npos,
+                  "the running view must state that the window only advances in active play");
     OPTIGD_ASSERT(main.find(std::string(optigd::core::kOptiGDVersion)) != std::string::npos,
                   "the panel must show the running version");
 
@@ -3661,6 +3809,7 @@ int main(int argc, char** argv) {
     testBenchmarkStoreAtomicWriteLeavesNoPartialFile();
     testBenchmarkControllerCompletesAndRestoresConfiguration();
     testBenchmarkControllerExcludesPausesAndStalls();
+    testBenchmarkWallClockCeilingIsAGuardNotABudget();
     testBenchmarkControllerLevelResetHonoursTheSetting();
     testBenchmarkControllerVerifiesItsOwnOverride();
     testBenchmarkControllerReportsPersistFailureHonestly();

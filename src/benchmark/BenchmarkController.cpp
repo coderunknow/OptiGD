@@ -148,7 +148,7 @@ void BenchmarkController::setPolicy(const BenchmarkPolicy& policy) {
     if (!(m_policy.stallThresholdMs > 0.0)) m_policy.stallThresholdMs = 250.0;
     if (!(m_policy.hitchThresholdMs > 0.0)) m_policy.hitchThresholdMs = 1000.0 / 30.0;
     if (!(m_policy.maxWallClockMs >= m_policy.targetDurationMs)) {
-        m_policy.maxWallClockMs = m_policy.targetDurationMs * 15.0;
+        m_policy.maxWallClockMs = recommendedWallClockCeilingMs(m_policy.targetDurationMs);
     }
 }
 

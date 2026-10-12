@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <sstream>
 
@@ -196,14 +197,32 @@ void applyBenchmarkSettingsToPolicy() {
 
     auto policy = benchmark::BenchmarkController::instance().getPolicy();
 
-    const double seconds = mod->getSettingValue<double>("benchmark-duration-seconds");
-    if (std::isfinite(seconds) && seconds >= 1.0) {
-        policy.targetDurationMs = seconds * 1000.0;
+    // `benchmark-duration-seconds` is declared `"type": "int"` in mod.json, and
+    // Geode maps the requested C++ type onto a SETTING type
+    // (`SettingTypeForValueType<std::integral>` -> `IntSettingV3`,
+    // `<std::floating_point>` -> `FloatSettingV3`) and then RTTI-casts the stored
+    // setting. Asking for `double` does not convert the value: the cast fails and
+    // `getSettingValue` silently returns `T()`. beta.3 shipped exactly that, so
+    // the setting was inert - every capture used the controller default whatever
+    // the user chose, with no error anywhere. Read the integral type the setting
+    // actually is (the setting listener in Hooks.cpp already used `int64_t`).
+    const int64_t seconds = mod->getSettingValue<int64_t>("benchmark-duration-seconds");
+    if (seconds >= 1) {
+        policy.targetDurationMs = static_cast<double>(seconds) * 1000.0;
+    } else {
+        // Reading 0 means the value never arrived. Say so in the log instead of
+        // quietly measuring a duration the user did not ask for.
+        log::warn("OptiGD Benchmark: benchmark-duration-seconds read as {}; keeping the {} s target",
+                  seconds, static_cast<int>(policy.targetDurationMs / 1000.0));
     }
-    // A capture must never be longer than the wall-clock ceiling, or it could
-    // only ever finish as `incomplete`.
-    if (policy.targetDurationMs > policy.maxWallClockMs * 0.9) {
-        policy.maxWallClockMs = policy.targetDurationMs / 0.9;
+
+    // Widen the wall-clock ceiling with the target, never narrow it. beta.3
+    // clamped it to `target / 0.9`, i.e. about 11 % of slack, which would have
+    // ended a long capture as `incomplete` the first time the player paused.
+    const double ceiling =
+        benchmark::BenchmarkController::recommendedWallClockCeilingMs(policy.targetDurationMs);
+    if (policy.maxWallClockMs < ceiling) {
+        policy.maxWallClockMs = ceiling;
     }
     policy.stopOnLevelReset = mod->getSettingValue<bool>("benchmark-stop-on-death");
 

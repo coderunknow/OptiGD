@@ -138,6 +138,21 @@ class BenchmarkController {
 public:
     static BenchmarkController& instance();
 
+    // Wall-clock slack granted to a capture, as a multiple of its target ACTIVE
+    // duration. The ceiling is a runaway guard for a session left open while the
+    // game is paused or backgrounded - it is NOT a time budget. Real play spends
+    // wall time on pauses, deaths, restarts, loading stalls and app switches that
+    // the active window deliberately excludes, so the slack has to be generous or
+    // an ordinary play session would be finalized as `incomplete` for nothing
+    // worse than having paused once.
+    static constexpr double kWallClockCeilingFactor = 15.0;
+
+    // The ceiling recommended for a target active duration. Callers may keep a
+    // wider one; nothing should silently narrow it (see `setPolicy`).
+    static double recommendedWallClockCeilingMs(double targetDurationMs) {
+        return targetDurationMs * kWallClockCeilingFactor;
+    }
+
     // --- configuration ------------------------------------------------------
     void setPolicy(const BenchmarkPolicy& policy);
     const BenchmarkPolicy& getPolicy() const { return m_policy; }

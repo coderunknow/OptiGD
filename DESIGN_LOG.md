@@ -762,3 +762,202 @@ Geometry Dash client, Geode loader, GPU or Android device took part. Second, the
 the Geode jobs compile against are whatever `geode-sdk/bindings` `main` happens to be when
 the job runs; that is a property of the upstream action, and it means a green run is a
 statement about a moment, not a permanent guarantee.
+
+---
+
+## Entry 7 — 2026-10-12: Real-game handoff pass — the path from the pause menu to a measured capture, and an installable artefact
+
+Entry 6 ended with beta.3 compiling, linking and packaging on three targets, and with
+every criterion that this environment can decide decided. What it could not produce was
+the one artefact a maintainer needs before merging: a `.geode` file they can put in their
+mods folder and play. This entry is that pass. It re-audited the code along the only path
+that matters in the real game — *pause menu → start a capture → get back to playing →
+finish → read the record* — found five defects on it, fixed them, added a regression guard
+for the class of bug that caused the worst one, and taught CI to publish a named,
+checksummed, per-platform package.
+
+### 7.1 The request, condensed
+
+Fix what demonstrably affects real-game use of Benchmark Mode (entry point, popup, HUD,
+the transition back into active gameplay, the lifecycle paths, configuration restoration,
+session integrity and truthful classification) using the existing architecture; produce a
+downloadable Windows x64 `.geode` for GD `2.2081` + Geode `5.10.1` built from the exact
+final commit, installable through the normal Geode workflow, clearly identified, with its
+SHA-256 recorded, and without committing binaries or cutting a release; verify everything
+verifiable and report the rest as `[NOT RUN]` / `[BLOCKED]` with the real reason.
+
+### 7.2 What the audit found `[VERIFIED by source read against geode-sdk v5.10.1 and geode-sdk/bindings main]`
+
+Continuing the defect lettering from §6.3 and §6.7.
+
+| # | Finding | Where | Why it matters / what was done |
+|---|---|---|---|
+| W | `benchmark-duration-seconds` is declared `"type": "int"` but was read as `double` | `src/geode/BenchmarkUI.cpp`, `applyBenchmarkSettingsToPolicy()` | `Mod::getSettingValue<T>` maps `T` onto a *setting type* and RTTI-casts the stored setting; a mismatch returns `T()` with **no error and no log line** (§7.3). The duration setting was therefore inert: whatever the user chose, every capture ran at the controller's built-in default, and the panel reported a target the user never asked for. Now read as `int64_t`, with a `log::warn` if the read yields `< 1` and the default is kept, so the failure is visible in the Geode log instead of silent. |
+| X | The Geode layer clamped the wall-clock ceiling to `target / 0.9` | `src/geode/BenchmarkUI.cpp`; rule now in `src/benchmark/BenchmarkController.hpp` | A ceiling with ~11 % slack is not a guard, it is a budget: the first pause, death or loading stall longer than the slack would finalize an otherwise healthy capture as `incomplete`. The rule moved into the core as `kWallClockCeilingFactor = 15.0` with `recommendedWallClockCeilingMs()`; `setPolicy()` keeps its existing behaviour (repair a ceiling *below* the target) and the Geode helper now **widens only, never narrows**. |
+| Y | Frames after the level ended were counted as gameplay | `src/geode/Hooks.cpp`, `GJBaseGameLayer::update` gate | `update` keeps running through the end animation, the completion effects and the results screen. Those frames are cheap to render, so a successful run — the session a player is most likely to keep open — inflated `avg_fps` and pulled every percentile down. The gate now also requires `!m_hasCompletedLevel && !m_levelEndAnimationStarted` (§7.5). |
+| Z | The benchmark HUD label was anchored top-right | `src/geode/Hooks.cpp`, `PlayLayer` fields | GD's standard play-layer layout puts the pause button top-right; the label is several lines tall at `zOrder 9999`, so it drew over the one control a capture needs. Moved to bottom-right (anchor `{1,0}`), which the diagnostics overlay (top-left) and the progress bar (top-centre) leave free. The label is not in a menu and never swallows touches — this is about not hiding controls, not about input. |
+| UX | The running-state panel text never said how to make the number move | `src/ui/BenchmarkPanel.cpp`, `formatMain` | A capture is normally started from the pause menu, where the window cannot advance. Without saying so, the panel reads as a countdown hung at `0.00 s`. The running branch now states: close the panel and **resume** the level; the window advances only during active gameplay; pauses, alt-tabs and stalls over 250 ms are excluded and reported separately. |
+
+Checked and deliberately left alone, because the audit found them correct:
+
+- `onQuit` and `PlayLayer::init` forward to `OptiGDManager::onLevelExit()`, which finalizes
+  an open session as `incomplete` with `level_exit` **and** restores the user's
+  configuration. Leaving a level mid-capture cannot strand the override.
+- `resetLevel` forwards to `onLevelReset()`, which honours `benchmark-stop-on-death`
+  (`stopOnLevelReset`): stop and finalize, or keep measuring with `reset_events` counted and
+  a `segment_not_contiguous` warning.
+- `startSession` has no "must be playing" precondition, which is what makes the pause-menu
+  entry point work at all. The window simply does not advance until play resumes.
+- The ceiling is enforced in `onFrame`, i.e. only while the game loop runs — a session left
+  open in a paused game does not silently expire.
+- Every terminal path (`finalize`, cancel, level exit, level reset, ceiling breach, persist
+  failure) clears the transient override before persisting, and `finalize` is idempotent.
+
+### 7.3 Root cause of W, verified in the SDK rather than assumed
+
+`geode-sdk` v5.10.1, `loader/include/Geode/loader/Mod.hpp`:
+
+```cpp
+template <class T> T getSettingValue(std::string_view key) const {
+    using S = typename SettingTypeForValueType<T>::SettingType;
+    if (auto setting = getSetting(key); setting &&
+        setting->getTypeInfo() == cast::typeinfo_pointer_cast<S>(...)) { ... }
+    return T();   // <- mismatch: silent default, no log, no error
+}
+```
+
+`SettingV3.hpp` fixes the mapping: `bool` → `BoolSettingV3`; **any** `std::integral` →
+`IntSettingV3`; **any** `std::floating_point` → `FloatSettingV3`; `std::string` /
+`string_view` → `StringSettingV3`; `std::filesystem::path` → `FileSettingV3`; `ccColor3B` /
+`ccColor4B` and the `Keybind` containers → their own types. `listenForSettingChanges<T>`
+uses the same mapping, so a mismatched listener does not misfire — it never fires at all.
+
+The rule this leaves behind, and the reason §7.6 exists: **a `mod.json` `"type": "int"`
+setting must be read through an integral C++ type, and a `"type": "float"` setting through a
+floating-point one.** There is no conversion, only a cast, and the cast failing is
+indistinguishable from the user having chosen `0`.
+
+### 7.4 The ceiling is a guard, not a budget
+
+Two numbers, so the semantics are unambiguous. `targetDurationMs` is what the capture is
+*for*: accumulated **active gameplay** time (§6.8). `maxWallClockMs` is how long the session
+may stay open in wall-clock terms before it is treated as a runaway. Active time excludes
+pauses, stalls, the level intro and (since Y) the level-end animation, so wall time is
+always strictly larger — by an amount that depends entirely on how the player plays. A
+ceiling tight enough that ordinary play breaches it converts "the player paused once" into
+"a failed measurement".
+
+At `15 ×`, a 60 s target may stay open for 15 minutes of wall time. The session that
+breaches that is genuinely abandoned, and it is finalized as `incomplete` with
+`wall_clock_exceeds_captured_window` rather than left running forever. The factor is now a
+named core constant used by both the core's own repair path and the Geode helper, so the two
+can no longer disagree.
+
+### 7.5 What the level-end gate excludes, and what it deliberately does not
+
+The gate reads two plain data members: `PlayLayer::m_hasCompletedLevel` and
+`GJBaseGameLayer::m_levelEndAnimationStarted` (ownership confirmed in `GeometryDash.bro`,
+lines 15202 and 8167). Their conjunction is what GD's own `PlayLayer::canPauseGame()`
+computes — but that reconstruction is declared `win inline` only (with addresses for imac,
+m1 and ios and **none** for Android), so calling it from cross-platform code would not link
+on Android32/Android64. Reading the members is portable and is the same information.
+
+Still measured on purpose: the attempt's own intro frames and the death animation. The level
+is being played during those, they cost real frame time, and they are symmetric between a
+baseline and an optimized capture — excluding them would bias nothing and hide a real cost.
+The level *end* is different: it is not gameplay, it is cheap, and it only happens in the
+sessions a player keeps.
+
+### 7.6 Regression guard: `tools/audit_setting_types.py`
+
+Defect W is the kind of bug that no amount of unit testing catches, because the C++ under
+test is correct in isolation — the defect is a *disagreement between two files*, and the
+failure mode is silence. So the guard is out of process, like the other validators: it
+parses `mod.json`, scans `src/` for `getSettingValue<T>("key")` and
+`listenForSettingChanges<T>("key", …)` (comments and string literals stripped, template
+argument lists read with a depth counter so `std::vector<geode::Keybind>` works), maps `T`
+through the SDK's own table and reports any disagreement. It also reports a key that is not
+declared, a call site with no template argument (which cannot be verified), and a C++ type
+outside the mapping (reported rather than guessed).
+
+It is mutation-tested two ways. Its `--self-test` runs 13 synthetic fixtures — the whole
+mapping agreeing, the beta.3 `int`-as-`double` defect, `bool`-as-`string`, `float`-as-`int`,
+a mismatched listener, an undeclared key, an unverifiable call site, an unmappable type,
+comment/string mentions that must not count, a declared-but-unread setting (a note, not an
+error), an unknown declared type, qualified/`const` spellings, and an empty tree. And it was
+run against the real tree with W reintroduced: it exits `1` naming
+`src/geode/BenchmarkUI.cpp:209`, and exits `0` with the fix in place. Registered in ctest as
+`OptiGDSettingTypeAudit` (the real audit) and `OptiGDSettingTypeAuditSelfTest` (the
+guard's own guard) — `ctest` grows from 6 to **8** checks.
+
+### 7.7 Verification actually run this pass `[MEASURED]`
+
+| Check | Command | Result |
+|---|---|---|
+| Unit tests (Release, standalone) | `./build/optigd_tests` | **51 passed / 0 failed** (was 50) |
+| Project checks | `ctest --test-dir build` | **8/8 passed** |
+| ASan + UBSan, `-fno-sanitize-recover=all` | `./build-asan/optigd_tests` + `ctest --test-dir build-asan` + `./build-asan/optigd_benchmark` | **51/51**, **8/8**, no sanitizer diagnostics, clean exit |
+| Setting-type audit vs. real tree | `tools/audit_setting_types.py` | 16 declared settings, 32 call sites, **PASS** |
+| Auditor mutation test | `tools/audit_setting_types.py --self-test` | **13/13 cases PASS**; plus the real-tree mutation above (`FAIL` with W reintroduced) |
+| Workflow YAML | `yaml.safe_load` over `.github/workflows/build.yml` | parses; both new steps present in their jobs |
+| Packaging step, dry-run | extracted `run:` script executed locally against a stand-in `.geode` | exit `0`; produced the named file, `SHA256SUMS.txt`, `INSTALL.txt`, the step-summary table and the four `$GITHUB_OUTPUT` values |
+
+The new test is `testBenchmarkWallClockCeilingIsAGuardNotABudget`. It sets a 5 s target with
+a 6 s ceiling, drives the controller through the ceiling with **zero** accepted frames and
+asserts the session ends `invalid` and non-comparable with `wall_clock_exceeds_captured_window`,
+`paused` and `no_samples_recorded`, that it was persisted, that the override was cleared and
+that the user's configuration came back byte-for-byte; then it runs a second session with 40
+real frames, pauses, breaches the ceiling and asserts `incomplete` with
+`wall_clock_exceeds_captured_window` and `capture_shorter_than_target`, a **distinct** session
+id, and the same restoration. `testBenchmarkPanelTextAndPagination` now asserts the resume
+guidance is in the running-state text.
+
+Two traps this test hit, recorded so the next one does not: `setPolicy()` silently repairs a
+`maxWallClockMs` below `targetDurationMs`, so a ceiling-breach test must use a ceiling *at or
+above* the target (an "unusable" ceiling is repaired away and never breaches); and
+`finalize()` derives the terminal state from the data, so a breach with no samples is
+`invalid`, not `incomplete`.
+
+Not run, and why: no Geometry Dash `2.2081` binary, no Geode loader, no GPU or display, no
+Windows host and no Android device exist in this environment, so nothing in `src/geode/*` can
+be executed here — it is compiled only by CI. The `Hooks.cpp` and `BenchmarkUI.cpp` changes
+above are therefore **compile-unverified locally** at the moment they were written; CI is the
+first thing that builds them.
+
+### 7.8 The installable artefact
+
+CI already uploaded `coderunknow.optigd-geode-package` (all three platforms in one archive)
+plus the two standalone JSON artefacts. What it did not upload was anything a tester could
+identify: no platform in the name, no version, no commit, no checksum. `build.yml` now adds,
+per Geode target, a second artefact named `OptiGD-<version>-<target>-<short-sha>` containing
+`coderunknow.optigd-<version>-<target>.geode`, `SHA256SUMS.txt` and an `INSTALL.txt` written
+for that platform, and the same treatment for the combined archive as
+`OptiGD-<version>-combined-<short-sha>`. The Windows x64 one is the deliverable this task
+asked for.
+
+Each of those steps also writes the version, target, commit, run id, byte size, SHA-256 and
+the `unzip -l` archive listing into `$GITHUB_STEP_SUMMARY`, so the checksum is readable from
+the run page and from the API (`/check-runs/{id}` → `.output.summary`) without downloading
+anything. The existing artefact names are untouched — `release.yml` depends on
+`coderunknow.optigd-geode-package` — and nothing is committed to the repository: binaries
+stay in Actions storage. `if-no-files-found: error` makes a silently empty upload a failed
+job rather than a missing artefact.
+
+### 7.9 What remains unverified, precisely
+
+- **Nothing in this repository has ever been loaded by Geode.** A green Geode job means
+  *compiles, links, packages, and the archive contains the expected binary and metadata*.
+- **The HUD's new bottom-right placement and the pause-button overlap it avoids are
+  judgements from GD's UI convention and the bindings, not from a rendered frame.**
+  `inline/PauseLayer.cpp` upstream reconstructs only `createToggleButton` — there is no
+  source for the pause-menu layout to check against — so the button and popup geometry are
+  likewise unverified visually. These are items 2 and 7 of the smoke test handed to the
+  maintainer.
+- **The pause → resume transition has never been observed in the real game.** It is now
+  stated in the panel text and the session semantics are tested headlessly with a synthetic
+  clock, but "the window advances when the player resumes" is a claim about GD's loop that
+  only a live run can confirm.
+- **Live frame-time captures, FPS effects and the CapFrameX procedure remain
+  `[NOT RUN] / [BLOCKED]`**, as in §6.10 and §5 of `EVIDENCE_REPORT.md`.
+- The bindings the Geode jobs compile against are `geode-sdk/bindings` `main` at run time —
+  a property of the upstream composite action, unchanged by this pass.

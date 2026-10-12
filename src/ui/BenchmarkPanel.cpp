@@ -136,6 +136,12 @@ std::string BenchmarkPanel::formatMain(const benchmark::BenchmarkSnapshot& snaps
         ss << "Window memory    : " << countString(snapshot.windowBytes / 1024) << " KB (bounded)\n";
         ss << "Transient config override active: " << onOff(snapshot.configOverrideActive)
            << " (your saved settings are untouched)\n";
+        // The capture is normally started from the pause menu, where the window
+        // cannot advance. Without this line the panel reads as a countdown that
+        // has hung at 0.00 s.
+        ss << "\nTo measure: close this panel and RESUME the level. The window only\n"
+              "advances during active gameplay; pauses, alt-tabs and stalls over\n"
+              "250 ms are excluded and reported separately.\n";
     } else {
         ss << "Nothing is being measured right now.\n\n";
         ss << "Start Baseline   - 60 s with OptiGD's optimization features in\n"

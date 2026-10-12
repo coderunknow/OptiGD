@@ -33,15 +33,26 @@ and a baseline capture keeps the diagnostics overlay and exporter on.
 
 ### 2.2 Reaching it
 
-1. Install `coderunknow.optigd.geode`, launch GD `2.2081`, enter a level.
+1. Install the `.geode` package (Geode → Mods → the folder button opens the
+   directory to copy it into), launch GD `2.2081`, enter a level.
 2. Press **Esc** (pause). The pause menu has an **OptiGD Benchmark** button.
 3. The popup has six views: **Main**, **Results**, **Detail**, **Compare**,
    **Protocol**, **External**.
+4. Press **Baseline** or **Optimized** to arm the capture, then **close the popup
+   and resume the level**. This is the part that is easy to get wrong: a capture
+   started from the pause menu measures nothing while the game is paused, so the
+   window stays at `0.00 s` until you are actually playing. The panel says this
+   while a capture is running, and the HUD repeats the countdown.
+5. Play until the target active time is reached. The session finalizes itself; a
+   notification reports the terminal state.
 
 Buttons: `Baseline 60s`, `Optimized 60s`, `Cancel`, `Results`, `Compare`, `Detail`,
 `Protocol`, `External`, `Export`, `As Baseline`, `As Optimized`, `Prev`, `Next`,
-`Back`. While a capture runs, a compact HUD label in the level shows the state and
-the time remaining. Nothing clickable is placed over the play area.
+`Back`. While a capture runs, a compact HUD label in the **bottom-right** corner of
+the level shows the state and the time remaining. It is placed there because GD's
+standard play-layer layout puts the pause button top-right, the diagnostics overlay
+owns the top-left and the progress bar the top-centre. Nothing clickable is placed
+over the play area, and the label is not in a menu, so it never swallows touches.
 
 ### 2.3 Mod settings
 
@@ -49,6 +60,15 @@ the time remaining. Nothing clickable is placed over the play area.
 |---|---|---|
 | `benchmark-duration-seconds` | `60` (range 15–600) | Target **active gameplay** time per session. |
 | `benchmark-stop-on-death` | `true` | On death/attempt restart: `true` finalizes immediately as `incomplete` with a `level_reset` interruption; `false` keeps measuring and records `reset_events` plus a `segment_not_contiguous` warning. |
+
+Both are read with the C++ type their declared `mod.json` type maps to
+(`int` → an integral type, `bool` → `bool`). That is not a detail: Geode resolves the
+requested C++ type to a *setting* type and RTTI-casts the stored setting, and a
+mismatch returns a default-constructed value with **no error and no log line** — the
+setting looks configurable and does nothing. `tools/audit_setting_types.py` (a `ctest`
+check) cross-checks every read and every change listener against `mod.json`. If a
+duration read ever comes back below 1 s, the mod logs a warning and keeps the built-in
+target rather than silently measuring something else.
 
 ### 2.4 What the 60 seconds counts
 
@@ -66,9 +86,27 @@ the level is actually being played:
 - `wall_duration_ms` is recorded separately, so the ratio of active play to elapsed
   time is always visible.
 
+Frames after the level is completed are excluded too: `GJBaseGameLayer::update` keeps
+running through the end animation, the completion effects and the results screen, and
+those frames are cheap to render, so counting them would inflate `avg_fps` and pull
+every percentile down in exactly the sessions a player is most likely to keep open. The
+attempt's own intro and death-animation frames **are** measured: the level is being
+played during those, and they are symmetric between a baseline and an optimized capture.
+
 The invariant `frames_observed == frames_counted + frames_excluded + frames_rejected`
 holds for every session and is enforced out of process by
 `tools/validate_benchmark_session_json.py`.
+
+**Two different clocks, on purpose.** `targetDurationMs` is what the capture is *for*:
+accumulated active gameplay time. `maxWallClockMs` is how long the session may stay open
+in wall-clock terms before it is treated as a runaway, and it is a **guard, not a budget**
+— `BenchmarkController::kWallClockCeilingFactor` grants 15× the target (15 minutes for a
+60 s capture). Because active time excludes pauses, stalls, the intro and the level end,
+wall time is always larger by an amount that depends on how the player plays; a tight
+ceiling would turn "paused once" into "measurement failed". A session that does breach it
+is finalized as `incomplete` carrying `wall_clock_exceeds_captured_window`, and the record
+shows both numbers. The ceiling is only evaluated while the game loop runs, so a session
+left open in a paused game does not silently expire.
 
 A session finalizes when accumulated active time reaches the target (`completed`),
 when the user cancels (`cancelled`), on level exit or death (`incomplete`), or when

@@ -329,15 +329,18 @@ All executed in this environment on the standalone engine build (Linux x86_64, G
 
 | Check | Command | Result |
 |---|---|---|
-| Unit & integration suite | `ctest -R OptiGDUnitTests` (`./build/optigd_tests`) | **PASS** — 50/50 test functions, exit 0 |
+| Unit & integration suite | `ctest -R OptiGDUnitTests` (`./build/optigd_tests`) | **PASS** — 51/51 test functions, exit 0 |
 | Diagnostics artefact schema | `ctest -R OptiGDDiagnosticsJson` | **PASS** — real report emitted, 0 schema errors |
 | `mod.json` metadata | `ctest -R OptiGDGeodeMetadataValidation` | **PASS** — 0 errors |
 | Benchmark **session** artefacts | `ctest -R OptiGDBenchmarkSessionJson` | **PASS** — 2 `[SIMULATED]` sessions + index + comparison emitted by the real controller, 0 schema errors |
 | External comparison tool | `ctest -R OptiGDExternalComparisonTool` | **PASS** — `compare_capframex.py --self-test` on synthetic CSV fixtures |
+| Setting-type audit vs. `mod.json` | `ctest -R OptiGDSettingTypeAudit` | **PASS** — 16 declared settings, 32 call sites in `src/`, 0 mismatches |
+| Auditor mutation test | `ctest -R OptiGDSettingTypeAuditSelfTest` | **PASS** — 13/13 synthetic fixtures; additionally re-run against the real tree with defect W reintroduced: exit 1 naming `src/geode/BenchmarkUI.cpp:209`, exit 0 with the fix restored |
 | Synthetic benchmark artefact schema | `ctest -R OptiGDBenchmarkJsonSchema` | **PASS** — 3 scenarios, `[SIMULATED]`, 0 heap allocs |
-| Full suite | `ctest --test-dir build --output-on-failure` | **PASS** — 6/6 |
+| Full suite | `ctest --test-dir build --output-on-failure` | **PASS** — 8/8 |
 | Compiler warnings | `-Wall -Wextra -Wpedantic` | **Clean** — zero warnings across all four standalone targets |
-| Address + UB sanitizers | `cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"`, then `ctest` + both binaries | **PASS** — 50/50 tests, 6/6 ctest, `optigd_benchmark` completed; no ASan/UBSan findings, no leaks |
+| Address + UB sanitizers | `cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"`, then `ctest` + both binaries | **PASS** — 51/51 tests, 8/8 ctest, `optigd_benchmark` completed; no ASan/UBSan findings, no leaks |
+| CI packaging step, dry-run | the `Prepare Installable Package For Download` `run:` script extracted from `build.yml` and executed locally against a stand-in `.geode` | **PASS** — exit 0; produced `coderunknow.optigd-v0.1.0-beta.3-Win64.geode`, `SHA256SUMS.txt`, `INSTALL.txt`, the step-summary table and all four `$GITHUB_OUTPUT` values. A dry run of the *script*, not of the Geode build: no `.geode` can be produced here (§7). |
 | Validator mutation check | 13 hand-tampered session artifacts (§4.3) | **13/13 detected**, each exit 1 with a specific message |
 | Geode-only translation units | `src/geode/Hooks.cpp`, `src/geode/BenchmarkUI.cpp` | **NOT RUN locally** — no Geode SDK/CLI/bindgen reachable; compiled by CI (§9) |
 
@@ -345,7 +348,7 @@ Build configuration used for every local result above:
 `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOPTIGD_STANDALONE_ONLY=ON`
 (Debian 12 x86_64, g++ 12.2.0, cmake 4.4.4, ninja 1.13.2).
 
-Test inventory (**50**). Pre-existing (9): `testMemoryArena`, `testSpatialHash`, `testVisibilityCuller`, `testParticleGovernor`, `testTriggerOptimizer`, `testMatrixCache`, `testAdaptiveGovernorAndFallback`, `testConfigAndPresetSync`, `testManagerAndCompatibility`. Added for beta.2 (11): `testGeodeVersionMetadataGrammar`, `testVisibilityCullerCellSizeReindex`, `testParticleGovernorIncrementalTotals`, `testDiagnosticsJsonEscaping`, `testConfigDeserializeRobustness`, `testCameraWorldRectConvention`, `testMatrixCacheStaleEntryPruning`, `testFallbackRecoveryDuringCooldown`, `testProfilerFastPath`, `testGdVersionCompatibilityGate`, `testTierDefaultsSingleSource`. Added for beta.3 (30): `testGovernorPercentilesUseTheSharedDefinition`, `testJsonValueRoundTripAndEscaping`, `testSampleWindowPercentileDefinitions`, `testSampleWindowRingOverflowDisclosesApproximation`, `testSampleWindowHitchStallAndRejectionAccounting`, `testConfigManagerTransientOverrideIsolation`, `testMakeBaselineConfigIsInternalControlNotVanilla`, `testBenchmarkSessionJsonRoundTrip`, `testBenchmarkSessionRejectsForeignAndNewerSchemas`, `testBenchmarkStoreNeverOverwritesPriorEvidence`, `testBenchmarkStoreAtomicWriteLeavesNoPartialFile`, `testBenchmarkControllerCompletesAndRestoresConfiguration`, `testBenchmarkControllerExcludesPausesAndStalls`, `testBenchmarkControllerLevelResetHonoursTheSetting`, `testBenchmarkControllerVerifiesItsOwnOverride`, `testBenchmarkControllerReportsPersistFailureHonestly`, `testBenchmarkCompareDirectionAndNoiseThreshold`, `testBenchmarkCompareRefusesIncompatibleSessions`, `testBenchmarkCompareNeverDividesByZero`, `testBenchmarkPanelTextAndPagination`, `testDiagnosticsWindowDisclosureIsConsistent`, `testDiagnosticsResetIsLevelScoped`, `testDiagnosticsExportIsAtomicAndChecked`, `testDiagnosticsSanitizesNonFiniteValues`, `testNoFabricatedParticleEstimate`, `testMatrixCacheDeltaIsNotTruncated`, `testSubsystemTimeOutsideFrameWindowIsNotMisattributed`, `testStallClassificationUsesTheSharedThreshold`, `testThreadCpuTimeIsReportedSeparatelyFromWallTime`, `testPlatformArchitectureIsReported`.
+Test inventory (**51**). Pre-existing (9): `testMemoryArena`, `testSpatialHash`, `testVisibilityCuller`, `testParticleGovernor`, `testTriggerOptimizer`, `testMatrixCache`, `testAdaptiveGovernorAndFallback`, `testConfigAndPresetSync`, `testManagerAndCompatibility`. Added for beta.2 (11): `testGeodeVersionMetadataGrammar`, `testVisibilityCullerCellSizeReindex`, `testParticleGovernorIncrementalTotals`, `testDiagnosticsJsonEscaping`, `testConfigDeserializeRobustness`, `testCameraWorldRectConvention`, `testMatrixCacheStaleEntryPruning`, `testFallbackRecoveryDuringCooldown`, `testProfilerFastPath`, `testGdVersionCompatibilityGate`, `testTierDefaultsSingleSource`. Added for beta.3 (31): `testGovernorPercentilesUseTheSharedDefinition`, `testJsonValueRoundTripAndEscaping`, `testSampleWindowPercentileDefinitions`, `testSampleWindowRingOverflowDisclosesApproximation`, `testSampleWindowHitchStallAndRejectionAccounting`, `testConfigManagerTransientOverrideIsolation`, `testMakeBaselineConfigIsInternalControlNotVanilla`, `testBenchmarkSessionJsonRoundTrip`, `testBenchmarkSessionRejectsForeignAndNewerSchemas`, `testBenchmarkStoreNeverOverwritesPriorEvidence`, `testBenchmarkStoreAtomicWriteLeavesNoPartialFile`, `testBenchmarkControllerCompletesAndRestoresConfiguration`, `testBenchmarkControllerExcludesPausesAndStalls`, `testBenchmarkControllerLevelResetHonoursTheSetting`, `testBenchmarkControllerVerifiesItsOwnOverride`, `testBenchmarkControllerReportsPersistFailureHonestly`, `testBenchmarkCompareDirectionAndNoiseThreshold`, `testBenchmarkCompareRefusesIncompatibleSessions`, `testBenchmarkCompareNeverDividesByZero`, `testBenchmarkPanelTextAndPagination`, `testDiagnosticsWindowDisclosureIsConsistent`, `testDiagnosticsResetIsLevelScoped`, `testDiagnosticsExportIsAtomicAndChecked`, `testDiagnosticsSanitizesNonFiniteValues`, `testNoFabricatedParticleEstimate`, `testMatrixCacheDeltaIsNotTruncated`, `testSubsystemTimeOutsideFrameWindowIsNotMisattributed`, `testStallClassificationUsesTheSharedThreshold`, `testThreadCpuTimeIsReportedSeparatelyFromWallTime`, `testPlatformArchitectureIsReported`, `testBenchmarkWallClockCeilingIsAGuardNotABudget` (added in the real-game handoff pass, `DESIGN_LOG.md` §7.7).
 
 ### Camera convention note `[VERIFIED by binding inspection]`
 
@@ -435,6 +438,33 @@ Mode opens, measures or saves anything in the real game. "All 6 CI jobs passed" 
 *builds and packages on three targets*, and it is reported as exactly that everywhere in
 this document.
 
+#### The real-game handoff commit — installable artefacts, and where its run is recorded
+
+The handoff pass (`DESIGN_LOG.md` Entry 7) changed what CI publishes without changing what
+it builds. Each Geode target job now also uploads `OptiGD-<version>-<target>-<short-sha>`
+containing `coderunknow.optigd-<version>-<target>.geode`, `SHA256SUMS.txt` and an
+`INSTALL.txt` written for that platform, and the combine job publishes the multi-platform
+archive as `OptiGD-<version>-combined-<short-sha>`. The pre-existing artefact names are
+untouched, because `release.yml` consumes `coderunknow.optigd-geode-package`. Version,
+target, commit, run id, byte size, SHA-256 and the `unzip -l` archive listing are written to
+`$GITHUB_STEP_SUMMARY`, readable on the run page and through
+`GET /repos/{owner}/{repo}/check-runs/{id}` → `.output.summary`. Uploads use
+`if-no-files-found: error`, so an empty upload fails the job instead of quietly producing no
+artefact.
+
+The run id, artefact name and SHA-256 **for the commit that produces them** are recorded in
+the pull-request conversation rather than in this file. A document committed in the same
+push cannot contain the id of the run that the push triggers, and adding a second commit
+purely to record it would move the head away from the commit the artefact was built from —
+which is the one property the handoff was asked to guarantee. This section is the standing
+explanation for that; the numbers themselves live in the PR.
+
+The packaging step was dry-run locally before it was pushed: the `run:` script was extracted
+from `build.yml` with its `${{ ... }}` expressions substituted and executed against a
+stand-in `.geode` archive, producing the named file, the checksum file, the install notes and
+the summary table with exit 0 (§8). That validates the script, not the Geode build — no
+`.geode` can be produced in this environment.
+
 ### 9.2 `v0.1.0-beta.2` — previous release (history, unchanged)
 
 Verified on GitHub Actions workflow **`Build & Verify OptiGD`**, run **`38060134568`**, branch
@@ -481,17 +511,17 @@ inspection.
 
 | # | Criterion | Status | What backs it |
 |---|---|---|---|
-| 1 | Benchmark Mode reachable in game, with start / timeout / cancel / results | **Mechanism `VERIFIED`; live run `NOT RUN`** | `PauseLayer::customSetup()` button + `BenchmarkPopup` (six views) + controller lifecycle, all unit-tested. No game process exists here, so the click path was never observed. |
+| 1 | Benchmark Mode reachable in game, with start / timeout / cancel / results | **Mechanism `VERIFIED`; live run `NOT RUN`** | `PauseLayer::customSetup()` button + `BenchmarkPopup` (six views) + controller lifecycle, all unit-tested. No game process exists here, so the click path was never observed. The handoff pass re-audited that path and fixed five defects on it (W, X, Y, Z, UX — `DESIGN_LOG.md` §7.2), including the transition back into active gameplay, which the panel now states explicitly. Popup geometry and the HUD's new bottom-right placement remain unrendered. |
 | 2 | Baseline vs optimized via **transient** config that never corrupts saved settings | **`VERIFIED`** | Two-layer `ConfigManager`; base layer is the only one serialized; `testConfigManagerTransientOverrideIsolation` + `testBenchmarkControllerCompletesAndRestoresConfiguration` assert the user config is identical after a capture. |
 | 3 | Internally consistent boundaries / samples / counters / percentiles, with regression tests | **`VERIFIED`** | Frame-budget identity, percentile ordering and method disclosure, state derived from data; 12 dedicated tests plus out-of-process validation of the emitted artifact. |
 | 4 | Save / reopen / compare / export without overwriting prior results | **`VERIFIED`** | Atomic writes, `already_exists` refusal, id allow-list, no pruning, rebuildable index, export path; 4 tests. |
 | 5 | Comparisons flag incompatible sessions instead of manufacturing conclusions | **`VERIFIED`** | Seven blocking conditions, non-blocking warnings, undefined-relative-change handling, `significanceClaimed == false`; 3 tests. |
 | 6 | Internal instrumentation clearly distinguished from external presented-frame measurement | **Labels `VERIFIED`; external half `NOT RUN`** | Evidence tags on every artifact, `measurement_definitions`, `limitations`, the overlay footer, `docs/BENCHMARKS.md` §1. No external capture exists to compare against (§5). |
 | 7 | Documented Windows x64 CapFrameX procedure + honest test evidence | **Procedure and tool `VERIFIED`; capture `NOT RUN` / `BLOCKED`** | Procedure in-game (**External**) and in `docs/BENCHMARKS.md` §3; `tools/compare_capframex.py` self-tested (ctest). No Windows host, GPU or CapFrameX binary here, so **no external numbers exist** and the CSV fixtures are synthetic. |
-| 8 | Discovered bugs investigated, fixed and tested | **`VERIFIED`** | Defects A–U in `DESIGN_LOG.md` §6.3 and §6.7, each with file, root cause, fix and a named regression test. |
+| 8 | Discovered bugs investigated, fixed and tested | **`VERIFIED`** | Defects A–U in `DESIGN_LOG.md` §6.3 and §6.7 and W, X, Y, Z plus the panel-guidance gap in §7.2, each with file, root cause, fix and a named regression test. Defect W additionally has an out-of-process guard (`tools/audit_setting_types.py`, two ctest checks) because it is a disagreement between two files that no unit test can see. |
 | 9 | Version metadata satisfies Geode's `v0.1.0-beta.3` grammar | **`VERIFIED`** | `tools/validate_geode_metadata.py` (ctest) + `testGeodeVersionMetadataGrammar` + the ported `VersionInfo::parse`; the dot before `3` is mandatory and `v0.1.0-beta3` is asserted rejected. |
-| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only** | CI run `38108365707` (commit `edc0048`): all three Geode targets compiled, linked and packaged, and the combined `.geode` (1,037,855 bytes) carries all three binaries. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V; both runs are recorded in §9.1. Nothing was executed in game, and no target was removed or disabled to get the green run. |
-| 11 | Docs and `DESIGN_LOG.md` accurate | **`VERIFIED`** | `README.md`, `CHANGELOG.md`, `docs/{ARCHITECTURE,BENCHMARKS,RELEASE_WORKFLOW}.md`, this report; `DESIGN_LOG.md` Entry 6 extended (§6.6–§6.10) without editing earlier entries. `AGENT.md` untouched: no governance change was needed, and the standing instruction is to ask first. |
+| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only, for the runs named in §9.1** | Runs `38108365707` (commit `edc0048`) and `38108968555`/`38108967055` (commit `0327231`): all six jobs green, all three Geode targets compiled, linked and packaged, and the combined `.geode` carries all three binaries with `mod.json` asserting `v0.1.0-beta.3`. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V. Nothing was executed in game, and no target was removed or disabled to get a green run. **The handoff-pass commit is newer than every run tabulated here**: its own run id, artefact name and SHA-256 are recorded in the PR conversation, because a file cannot contain the id of the run that builds it, and a previous green run does not validate a newer commit. |
+| 11 | Docs and `DESIGN_LOG.md` accurate | **`VERIFIED`** | `README.md`, `CHANGELOG.md`, `docs/{ARCHITECTURE,BENCHMARKS,RELEASE_WORKFLOW}.md`, this report; `DESIGN_LOG.md` Entry 6 extended (§6.6–§6.10) and Entry 7 added for the handoff pass, without editing earlier entries. `AGENT.md` untouched: no governance change was authorized, and the standing instruction is to ask first — the question about its stale `v0.1.0-beta.2` version references was put to the maintainer and is recorded as an open decision in §10.3. |
 | 12 | Actual results reported; anything not run marked `NOT RUN` / `BLOCKED` | **`VERIFIED`** | This report, `CHANGELOG.md` Notes, `DESIGN_LOG.md` §6.9–§6.10 and `docs/BENCHMARKS.md` all carry the same tags. |
 | 13 | No fabricated measurements, FPS gains, benchmark outputs or CI results | **`VERIFIED`** | Every artifact from a standalone binary is stamped `[SIMULATED]` and the code cannot stamp it otherwise (§4.4); the emitted "50.00 → 62.50 FPS" is a declared fixture; CI status is read from the GitHub API, and §9.1 reports the failed run as a failure with its cause rather than presenting only the green one. |
 
@@ -502,8 +532,9 @@ inspection.
 | `v0.1.0-beta1` failed to load because of the `mod.json` version string | **PASS** (`[VERIFIED]` statically + `[MEASURED]` dynamically) |
 | `v0.1.0-beta.3` is accepted by Geode `5.10.1`'s `VersionInfo` grammar | **PASS** (`[MEASURED]` via extracted-grammar harness + ported implementation + validator) |
 | `mod.json` / `Types.hpp` / `CMakeLists.txt` / CI version strings are consistent | **PASS** (`[MEASURED]` via `tools/validate_geode_metadata.py`) |
-| 50/50 unit & integration tests pass; clean under ASan/UBSan; zero compiler warnings | **PASS** (`[MEASURED]` locally) |
+| 51/51 unit & integration tests pass; 8/8 ctest checks; clean under ASan/UBSan; zero compiler warnings | **PASS** (`[MEASURED]` locally) |
 | All four JSON/text artifact kinds are schema-valid | **PASS** (`[MEASURED]` — diagnostics report, synthetic benchmark suite, benchmark session set, external-comparison self-test) |
+| Every `getSettingValue` / `listenForSettingChanges` type matches the `mod.json` type it reads | **PASS** (`[MEASURED]` by `tools/audit_setting_types.py`, 32 call sites, and mutation-tested against the beta.3 defect) |
 | Benchmark Mode can capture, persist, reload, compare and export a session | **PASS** (`[VERIFIED]` by test, `[SIMULATED]` runtime) |
 | A benchmark capture cannot corrupt the user's saved settings | **PASS** (`[VERIFIED]`) |
 | Prior benchmark evidence is never overwritten or pruned | **PASS** (`[VERIFIED]`) |
@@ -512,7 +543,15 @@ inspection.
 | `mod.json` in the shipped archive declares `v0.1.0-beta.3` | **PASS** (`[VERIFIED]` by CI's hard `jq -e` gates on all three platform archives and the combined archive, run `38108365707`; §9.1) |
 | Multi-platform `.geode` builds (Win64 / Android32 / Android64) still succeed | **PASS** (`[VERIFIED]` by CI, run `38108365707`, after defect V was fixed; §9.1). Compile + package only — never loaded by Geode. |
 | The mod loads and runs inside a real Geometry Dash `2.2081` client | **BLOCKED** — no GD binary, GPU context, or Geode loader in this environment |
-| Benchmark Mode works on screen in a real game (button placement, popup layout, HUD) | **NOT RUN** — derived from the pinned bindings and SDK source; never rendered |
+| Benchmark Mode works on screen in a real game (button placement, popup layout, HUD) | **NOT RUN** — derived from the pinned bindings and SDK source; never rendered. This includes the HUD's new bottom-right position: it replaces a placement that would have covered GD's pause button, but neither placement has been looked at in a running game. |
 | Any improvement in live in-game frame rate | **NOT CLAIMED / UNVERIFIED** — no in-game capture and no external capture exist. **That the benchmark system works is not evidence that OptiGD improves FPS**, and nothing here should be read as implying it. |
 | Statistical significance of any difference | **NOT CLAIMED** — `significanceClaimed` is `false` by construction; a single pair of captures cannot support such a claim |
 | A merge, release tag or official release was performed for beta.3 | **NO** — the work stays on `arena/f6290987-optigd` and is handed over as a Draft PR |
+
+### 10.3 Open decisions at the time of writing
+
+| Decision | State | Why it is still open |
+|---|---|---|
+| Whether to refresh the `v0.1.0-beta.2` version references in `AGENT.md` lines 5–8 to `v0.1.0-beta.3` | **Asked, not decided** | The standing instruction is to ask before touching `AGENT.md` and to make no governance or design-policy change without authorization. Refreshing version strings is arguably not a governance change, but it is the maintainer's file and the question was put to them directly rather than answered on their behalf. `AGENT.md` is therefore unchanged in this PR. If the answer is "yes", it is a documentation-only commit and the artefact for the resulting head must be rebuilt before it is handed over again, so that the file and the commit stay in agreement. |
+| Merge of PR #7 | **Not authorized** | The merge gate is: fixes → validated artefact → handoff → the maintainer's real-game result → explicit authorization. The PR stays **Draft**. No merge, no release tag, no official release, and the PR was not closed. |
+| Whether the HUD's bottom-right placement is right | **For the maintainer to decide** | It replaces a placement that would have covered GD's pause button. Neither has been rendered; smoke-test item 7 is the check. |
