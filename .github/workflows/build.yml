@@ -46,7 +46,7 @@ jobs:
       - name: Verify Benchmark & Version Metadata
         shell: bash
         run: |
-          jq -e '.optigd_version == "0.1.0-beta.2"' benchmark_results.json
+          jq -e '.optigd_version == "0.1.0-beta.3"' benchmark_results.json
           jq -e '.evidence_classification == "[SIMULATED]"' benchmark_results.json
           python3 tools/generate_report.py benchmark_results.json
 
@@ -103,8 +103,40 @@ jobs:
           fi
           unzip -l "$GEODE_FILE"
           unzip -l "$GEODE_FILE" | grep -F "${{ matrix.expected_bin }}"
-          unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.2"'
+          unzip -p "$GEODE_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
           unzip -p "$GEODE_FILE" mod.json | jq -e '.id == "coderunknow.optigd"'
+
+      # The named, checksummed package a tester downloads is published by the
+      # `publish-installable-packages` job, which runs AFTER `combine`. That job
+      # needs this archive, but `combine@main` deletes the `geode-build-*`
+      # artefacts it consumes and its `delete-artifacts` input cannot turn that
+      # off (`if: ${{ inputs.delete-artifacts }}` sees the STRING "false", which
+      # is truthy - observed in run 38211200450, where the artefacts were gone).
+      # So a second copy is staged here for the publishing job to pick up.
+      #
+      # The suffix matters: `combine@main` merges every file matching
+      # `find ./artifacts -name '*.geode'` across ALL artefacts in the run and
+      # assumes each one lives in a per-platform build directory. An artefact
+      # carrying a differently named `.geode` makes it call `geode package merge`
+      # with no inputs and fail - that is exactly what broke runs 38207332745 and
+      # 38208852829. `.bin` is not matched by that glob; the publishing job
+      # renames the file back and re-verifies the archive before it ships.
+      - name: Stage Package For The Publishing Job
+        shell: bash
+        run: |
+          set -euo pipefail
+          GEODE_FILE="${{ steps.build.outputs.build-output }}/coderunknow.optigd.geode"
+          mkdir -p stage
+          cp "$GEODE_FILE" stage/coderunknow.optigd.package.bin
+          unzip -l stage/coderunknow.optigd.package.bin | grep -qF " ${{ matrix.expected_bin }}"
+          sha256sum "$GEODE_FILE" stage/coderunknow.optigd.package.bin
+
+      - name: Upload Staged Package (${{ matrix.target }})
+        uses: actions/upload-artifact@v7
+        with:
+          name: optigd-source-${{ matrix.target }}
+          path: stage/coderunknow.optigd.package.bin
+          if-no-files-found: error
 
   # ==========================================================================
   # Job 3: Combine Multi-Platform .geode Package & Verify Combined Archive
@@ -117,6 +149,12 @@ jobs:
       - name: Combine Platform Binaries
         id: combine
         uses: geode-sdk/build-geode-mod/combine@main
+        # No `delete-artifacts: false` here, even though the action documents
+        # that input: it gates the deletion on `if: ${{ inputs.delete-artifacts }}`,
+        # and a composite action's inputs are strings, so "false" is truthy and the
+        # `geode-build-*` artefacts are deleted anyway (run 38211200450). The
+        # publishing job therefore reads the staged `optigd-source-*` copies the
+        # build jobs upload instead - see DESIGN_LOG.md §7.8.
 
       - name: Verify Combined Multi-Platform .geode Archive
         shell: bash
@@ -131,10 +169,431 @@ jobs:
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.dll"
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android64.so"
           unzip -l "$COMBINED_FILE" | grep -F "coderunknow.optigd.android32.so"
-          unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta.2"'
+          unzip -p "$COMBINED_FILE" mod.json | jq -e '.version == "v0.1.0-beta.3"'
 
       - name: Upload Combined .geode Mod
         uses: actions/upload-artifact@v7
         with:
           name: coderunknow.optigd-geode-package
           path: ${{ steps.combine.outputs.build-output }}/*.geode
+
+  # ==========================================================================
+  # Job 4: Publish the named, checksummed, installable package for each target.
+  #
+  # This runs AFTER the combine job on purpose. `geode-sdk/build-geode-mod/
+  # combine@main` downloads every artefact in the run and merges whatever
+  # `find ./artifacts -name '*.geode'` turns up, assuming each one lives in a
+  # per-platform build directory; an artefact that carries a differently named
+  # .geode makes it call `geode package merge` with no inputs and fail. So the
+  # named packages are built here, from the artefacts the build action and the
+  # combine job published, and never exist while combine is running.
+  # ==========================================================================
+  publish-installable-packages:
+    name: Publish Installable Package (${{ matrix.label }})
+    needs: [build-geode-mod, combine]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            source: optigd-source-Win64
+            source_glob: '*.bin'
+            target: Win64
+            required_bins: coderunknow.optigd.dll
+            forbidden_bins: coderunknow.optigd.android64.so coderunknow.optigd.android32.so
+          - label: Android64
+            source: optigd-source-Android64
+            source_glob: '*.bin'
+            target: Android64
+            required_bins: coderunknow.optigd.android64.so
+            forbidden_bins: coderunknow.optigd.dll coderunknow.optigd.android32.so
+          - label: Android32
+            source: optigd-source-Android32
+            source_glob: '*.bin'
+            target: Android32
+            required_bins: coderunknow.optigd.android32.so
+            forbidden_bins: coderunknow.optigd.dll coderunknow.optigd.android64.so
+          - label: Combined
+            source: coderunknow.optigd-geode-package
+            source_glob: '*.geode'
+            target: combined
+            required_bins: coderunknow.optigd.dll coderunknow.optigd.android64.so coderunknow.optigd.android32.so
+            forbidden_bins: ""
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Source Artefact (${{ matrix.source }})
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.source }}
+          path: source
+
+      - name: Prepare Named Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r '.version' mod.json)
+          EXPECTED_ID=$(jq -r '.id' mod.json)
+          GEODE_REQ=$(jq -r '.geode' mod.json)
+          TARGET="${{ matrix.target }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          PKG_NAME="coderunknow.optigd-${VERSION}-${TARGET}.geode"
+
+          # Platform legs read the staged copy (`*.bin`, see the build job); the
+          # combined leg reads the archive the combine job published (`*.geode`).
+          found=$(find source -name '${{ matrix.source_glob }}' -type f | sort)
+          count=$(printf '%s\n' "$found" | grep -c . || true)
+          if [ "$count" != "1" ]; then
+            echo "ERROR: expected exactly one ${{ matrix.source_glob }} file in ${{ matrix.source }}, found $count"
+            printf '%s\n' "$found"
+            exit 1
+          fi
+          SRC="$found"
+          echo "source archive: $SRC ($(wc -c < "$SRC" | tr -d '[:space:]') bytes)"
+
+          # Prove the archive really is the platform it is about to be named for.
+          listing=$(unzip -l "$SRC")
+          echo "$listing" | grep -qF " mod.json" || {
+            echo "ERROR: $SRC contains no mod.json"; exit 1; }
+          for bin in ${{ matrix.required_bins }}; do
+            echo "$listing" | grep -qF " $bin" || {
+              echo "ERROR: $SRC does not contain $bin, so it is not a ${TARGET} package"; exit 1; }
+          done
+          for bin in ${{ matrix.forbidden_bins }}; do
+            if echo "$listing" | grep -qF " $bin"; then
+              echo "ERROR: $SRC contains $bin, which does not belong to a ${TARGET} package"; exit 1
+            fi
+          done
+          inner_id=$(unzip -p "$SRC" mod.json | jq -r '.id')
+          inner_version=$(unzip -p "$SRC" mod.json | jq -r '.version')
+          if [ "$inner_id" != "$EXPECTED_ID" ] || [ "$inner_version" != "$VERSION" ]; then
+            echo "ERROR: $SRC carries ${inner_id} ${inner_version}, expected ${EXPECTED_ID} ${VERSION}"
+            exit 1
+          fi
+
+          mkdir -p dist
+          cp "$SRC" "dist/${PKG_NAME}"
+          (cd dist && sha256sum "${PKG_NAME}" > SHA256SUMS.txt)
+          CHECKSUM=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          SIZE_BYTES=$(wc -c < "dist/${PKG_NAME}" | tr -d '[:space:]')
+
+          case "$TARGET" in
+            Win64)
+              WHERE="Windows x64"
+              STEPS="  1. Make sure Geode is already installed and Geometry Dash starts with the
+               Geode loader (a Geode button appears in the game's main menu).
+            2. In the game, open Geode -> Mods and use the folder button there to open
+               the mods directory. That is the authoritative location on your machine -
+               do not assume a Steam install path. Equivalently, it is the
+               \"geode/mods\" folder inside your Geometry Dash installation.
+            3. Copy ${PKG_NAME} into that folder.
+            4. Restart Geometry Dash. OptiGD should be listed in Geode -> Mods with
+               version ${VERSION}."
+              ;;
+            combined)
+              WHERE="Windows x64, Android64 or Android32 (one package, all three)"
+              STEPS="  1. Make sure Geode is already installed for Geometry Dash on this device.
+            2. Open the in-game Geode menu -> Mods and use the folder button there to
+               open the mods directory. That is the authoritative location on your
+               machine; do not assume an install path. On Android that is normally
+               Android/data/com.robtopx.geometryjump/geode/mods, reached through Geode.
+            3. Copy ${PKG_NAME} into that folder.
+            4. Restart Geometry Dash and check Geode -> Mods for OptiGD ${VERSION}.
+            This archive contains the Windows, Android64 and Android32 binaries; a
+            platform-specific package is smaller if you only need one."
+              ;;
+            *)
+              WHERE="Android (${TARGET})"
+              STEPS="  1. Make sure Geode is already installed for Geometry Dash on this device.
+            2. Open the Geode app (or the in-game Geode menu) -> Mods and use its
+               folder/browse option to reach the mods directory. On Android that is
+               normally Android/data/com.robtopx.geometryjump/geode/mods - reach it
+               through Geode rather than assuming a path.
+            3. Copy ${PKG_NAME} into that folder.
+            4. Restart Geometry Dash and check Geode -> Mods for OptiGD ${VERSION}."
+              ;;
+          esac
+
+          cat > dist/INSTALL.txt <<TXT
+          OptiGD ${VERSION} - Geode mod package for ${WHERE}
+
+          Built from commit ${GITHUB_SHA}
+          GitHub Actions run ${GITHUB_RUN_ID} (job ${{ matrix.label }})
+          Source artefact : ${{ matrix.source }}
+          File            : ${PKG_NAME}
+          Size            : ${SIZE_BYTES} bytes
+          SHA-256         : ${CHECKSUM}
+          Requires        : Geode ${GEODE_REQ} and the Geometry Dash version mod.json targets
+
+          WHAT THIS IS
+            A Geode mod package. It is not a standalone program, it does not replace
+            any game file, and it does nothing until Geode loads it.
+
+          HOW TO INSTALL
+          ${STEPS}
+
+          HOW TO CHECK THE FILE YOU DOWNLOADED
+            Windows PowerShell : Get-FileHash -Algorithm SHA256 ${PKG_NAME}
+            Linux / macOS      : sha256sum ${PKG_NAME}
+            The value must equal the SHA-256 above.
+
+          IF IT DOES NOT LOAD, OR SOMETHING LOOKS WRONG
+            Open the Geode log (in-game Geode -> Logs, or geode.log next to the game
+            executable) and look for lines containing "coderunknow.optigd". When
+            reporting a problem, include those lines, the OptiGD version, the Geode
+            version and, for Benchmark Mode, the session files under
+            <mods folder>/coderunknow.optigd/benchmarks/.
+          TXT
+
+          {
+          echo "### Installable package - ${TARGET}"
+          echo ""
+          echo "| Field | Value |"
+          echo "| --- | --- |"
+          echo "| Artifact | \`OptiGD-${VERSION}-${TARGET}-${SHORT_SHA}\` |"
+          echo "| File | \`${PKG_NAME}\` |"
+          echo "| Version | \`${VERSION}\` |"
+          echo "| Source artefact | \`${{ matrix.source }}\` |"
+          echo "| Source file | \`$(basename "$SRC")\` |"
+          echo "| Commit | \`${GITHUB_SHA}\` |"
+          echo "| Run | \`${GITHUB_RUN_ID}\` |"
+          echo "| Size | ${SIZE_BYTES} bytes |"
+          echo "| SHA-256 | \`${CHECKSUM}\` |"
+          echo ""
+          echo "<details><summary>Archive contents</summary>"
+          echo ""
+          echo '```'
+          unzip -l "dist/${PKG_NAME}"
+          echo '```'
+          echo ""
+          echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "artifact_name=OptiGD-${VERSION}-${TARGET}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PKG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha256=${CHECKSUM}" >> "$GITHUB_OUTPUT"
+          echo "size_bytes=${SIZE_BYTES}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Installable Package (${{ matrix.target }})
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            dist/*.geode
+            dist/SHA256SUMS.txt
+            dist/INSTALL.txt
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 5: Download the published artefacts again and verify them as a tester
+  #        would, then record the checksums on the pull request.
+  #
+  # The per-platform jobs verify the archive they just built. This job verifies
+  # what was actually PUBLISHED: it downloads the artefacts back out of Actions
+  # storage, re-computes each SHA-256 against the SHA256SUMS.txt inside the
+  # artefact, opens the .geode to check its binary and its mod.json, and checks
+  # that the artefact name carries the version, the platform and the commit. A
+  # mismatch fails the job rather than being reported as a note.
+  #
+  # It also exists because the checksum has to be readable: job logs and the
+  # $GITHUB_STEP_SUMMARY of a matrix job are not reachable through the API from
+  # a sandboxed environment, so the numbers are posted to the pull request.
+  # ==========================================================================
+  verify-published-artifacts:
+    name: Verify Published Artefacts & Record Checksums
+    needs: publish-installable-packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Published Artefacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: OptiGD-*
+          path: downloads
+
+      - name: Verify Every Published Artefact
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED_VERSION=$(jq -r '.version' mod.json)
+          EXPECTED_ID=$(jq -r '.id' mod.json)
+          SHORT_SHA="${GITHUB_SHA::7}"
+          FAILURES=0
+          : > report.md
+          : > summary.md
+
+          note() { echo "$@" >> report.md; }
+
+          note "| Artefact | File | Platform binaries | Bytes | SHA-256 | Checks |"
+          note "| --- | --- | --- | --- | --- | --- |"
+
+          shopt -s nullglob
+          dirs=(downloads/*/)
+          if [ "${#dirs[@]}" -eq 0 ]; then
+            echo "ERROR: no OptiGD-* artefacts were published by this run"
+            exit 1
+          fi
+
+          for dir in "${dirs[@]}"; do
+            name=$(basename "$dir")
+            checks=0
+            problems=""
+            fail() { problems="${problems}${problems:+; }$1"; FAILURES=$((FAILURES + 1)); }
+
+            geodes=("$dir"*.geode)
+            if [ "${#geodes[@]}" -ne 1 ]; then
+              fail "expected exactly one .geode, found ${#geodes[@]}"
+              note "| \`${name}\` | - | - | - | - | **FAIL**: ${problems} |"
+              continue
+            fi
+            pkg="${geodes[0]}"
+            pkg_name=$(basename "$pkg")
+
+            # The platform sits between two dashes, so the pattern must be open
+            # at both ends: `*"-Win64-"` would require the name to END there.
+            case "$name" in
+              *"-Win64-"*)      target=Win64      ; bins="coderunknow.optigd.dll" ;;
+              *"-Android64-"*)  target=Android64  ; bins="coderunknow.optigd.android64.so" ;;
+              *"-Android32-"*)  target=Android32  ; bins="coderunknow.optigd.android32.so" ;;
+              *"-combined-"*)   target=combined   ; bins="coderunknow.optigd.dll coderunknow.optigd.android64.so coderunknow.optigd.android32.so" ;;
+              *) fail "artefact name does not identify a platform"; target="?" ; bins="" ;;
+            esac
+
+            # name carries version, platform and commit
+            if [ "$name" = "OptiGD-${EXPECTED_VERSION}-${target}-${SHORT_SHA}" ]; then
+              checks=$((checks + 1))
+            else
+              fail "name is not OptiGD-${EXPECTED_VERSION}-${target}-${SHORT_SHA}"
+            fi
+            if [ "$pkg_name" = "coderunknow.optigd-${EXPECTED_VERSION}-${target}.geode" ]; then
+              checks=$((checks + 1))
+            else
+              fail "package file is not coderunknow.optigd-${EXPECTED_VERSION}-${target}.geode"
+            fi
+
+            # checksum recorded inside the artefact must match the file
+            if [ -f "${dir}SHA256SUMS.txt" ]; then
+              if (cd "$dir" && sha256sum -c SHA256SUMS.txt --quiet); then
+                checks=$((checks + 1))
+              else
+                fail "SHA256SUMS.txt does not match the packaged file"
+              fi
+            else
+              fail "no SHA256SUMS.txt in the artefact"
+            fi
+            checksum=$(sha256sum "$pkg" | awk '{print $1}')
+            size=$(wc -c < "$pkg" | tr -d '[:space:]')
+
+            # the archive must contain what a Geode loader needs, and nothing
+            # belonging to another platform
+            listing=$(unzip -l "$pkg")
+            if echo "$listing" | grep -qF " mod.json"; then
+              checks=$((checks + 1))
+            else
+              fail "archive has no mod.json"
+            fi
+            for bin in $bins; do
+              if echo "$listing" | grep -qF " $bin"; then
+                checks=$((checks + 1))
+              else
+                fail "archive is missing $bin"
+              fi
+            done
+            for foreign in coderunknow.optigd.dll coderunknow.optigd.android64.so coderunknow.optigd.android32.so; do
+              case " $bins " in
+                *" $foreign "*) continue ;;
+              esac
+              if echo "$listing" | grep -qF " $foreign"; then
+                fail "archive contains $foreign, which does not belong to a ${target} package"
+              fi
+            done
+
+            inner_id=$(unzip -p "$pkg" mod.json | jq -r '.id')
+            inner_version=$(unzip -p "$pkg" mod.json | jq -r '.version')
+            inner_geode=$(unzip -p "$pkg" mod.json | jq -r '.geode')
+            if [ "$inner_id" = "$EXPECTED_ID" ] && [ "$inner_version" = "$EXPECTED_VERSION" ]; then
+              checks=$((checks + 1))
+            else
+              fail "inner mod.json is ${inner_id} ${inner_version}, expected ${EXPECTED_ID} ${EXPECTED_VERSION}"
+            fi
+
+            if [ "$target" != "combined" ] && [ "$target" != "?" ]; then
+              if [ -f "${dir}INSTALL.txt" ]; then
+                checks=$((checks + 1))
+              else
+                fail "no INSTALL.txt in the artefact"
+              fi
+            fi
+
+            if [ -z "$problems" ]; then
+              note "| \`${name}\` | \`${pkg_name}\` | ${bins// /, } | ${size} | \`${checksum}\` | ${checks} passed |"
+            else
+              note "| \`${name}\` | \`${pkg_name}\` | ${bins// /, } | ${size} | \`${checksum}\` | **FAIL**: ${problems} |"
+            fi
+            echo "- ${name} | Geode ${inner_geode} | ${size} bytes | sha256:${checksum}" >> summary.md
+          done
+
+          {
+            echo "### Published artefacts, re-downloaded and verified"
+            echo ""
+            echo "Commit \`${GITHUB_SHA}\`, run ${GITHUB_RUN_ID}. Every artefact below was"
+            echo "downloaded back out of Actions storage by this job; the SHA-256 is"
+            echo "re-computed here and compared with the SHA256SUMS.txt inside the artefact."
+            echo ""
+            cat report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat report.md
+          if [ "$FAILURES" -ne 0 ]; then
+            echo "ERROR: ${FAILURES} artefact check(s) failed"
+            exit 1
+          fi
+          echo "all published artefacts verified"
+
+      - name: Record Checksums On The Pull Request
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$GITHUB_REF_NAME" \
+                 --state open --json number --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            echo "no open pull request for $GITHUB_REF_NAME; nothing to record"
+            exit 0
+          fi
+          VERSION=$(jq -r '.version' mod.json)
+          SHORT_SHA="${GITHUB_SHA::7}"
+          {
+            echo "### Installable artefacts for commit \`${GITHUB_SHA}\`"
+            echo ""
+            echo "Run [\`${GITHUB_RUN_ID}\`](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo "Each artefact was downloaded back out of Actions storage and re-verified by the"
+            echo "\`Verify Published Artefacts & Record Checksums\` job: name, package file name,"
+            echo "SHA-256 against the checksum file inside the artefact, archive contents, and the"
+            echo "\`mod.json\` inside the archive."
+            echo ""
+            cat report.md
+            echo ""
+            echo "Download from the run page above (Artefacts section), or:"
+            echo ""
+            echo '```'
+            echo "gh run download ${GITHUB_RUN_ID} --repo ${GITHUB_REPOSITORY} --name OptiGD-${VERSION}-Win64-${SHORT_SHA} --dir optigd-win64"
+            echo '```'
+            echo ""
+            echo "Nothing here has been loaded by Geode or run inside Geometry Dash: a green job"
+            echo "means the package was built, published and verified as an archive."
+          } > pr-comment.md
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md

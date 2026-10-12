@@ -1,5 +1,6 @@
 #include "AdaptiveGovernor.hpp"
 #include "../core/Logger.hpp"
+#include "../diagnostics/SampleWindow.hpp"
 #include <numeric>
 #include <cmath>
 #include <algorithm>
@@ -85,17 +86,19 @@ void AdaptiveGovernor::calculateWindowStats(core::MemoryArena* arena) {
         sortedPtr = m_scratchSortBuffer.data();
     }
 
-    size_t idx50 = n / 2;
-    size_t idx95 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.95));
-    size_t idx99 = static_cast<size_t>(std::floor(static_cast<double>(n) * 0.99));
-    if (idx95 >= n) idx95 = n - 1;
-    if (idx99 >= n) idx99 = n - 1;
-
-    m_stats.medianMs = (n % 2 == 0 && n >= 2)
-                           ? 0.5 * (sortedPtr[idx50 - 1] + sortedPtr[idx50])
-                           : sortedPtr[idx50];
-    m_stats.p95Ms = sortedPtr[idx95];
-    m_stats.p99Ms = sortedPtr[idx99];
+    // Percentiles come from the one shared implementation. This governor used to
+    // index the sorted buffer at floor(n * p) while the diagnostics window and
+    // Benchmark Mode use nearest-rank (rank = ceil(n * p), index = rank - 1), so
+    // the same frames could produce two different "p95" numbers and the governor
+    // throttled on a value no report could reproduce. The two agree whenever
+    // n * p is fractional, and disagree by exactly one sample when n * p is an
+    // integer - which is the common case for round windows (n = 20 or 60 or 120
+    // with p = 0.95), where floor() reported the NEXT slower frame: for 20 frames
+    // the "p95" was the slowest frame in the window. Both paths now call into
+    // diagnostics::SampleWindow, where the definition is documented and tested.
+    m_stats.medianMs = diagnostics::SampleWindow::medianFromSorted(sortedPtr, n);
+    m_stats.p95Ms = diagnostics::SampleWindow::percentileFromSorted(sortedPtr, n, 0.95);
+    m_stats.p99Ms = diagnostics::SampleWindow::percentileFromSorted(sortedPtr, n, 0.99);
 }
 
 void AdaptiveGovernor::update(core::OptiConfig& currentConfig, core::MemoryArena* arena) {

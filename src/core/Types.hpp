@@ -10,13 +10,36 @@ namespace optigd::core {
 
 // NOTE: The version tag MUST satisfy Geode 5.10.1's VersionInfo grammar
 // (`vMAJOR.MINOR.PATCH[-alpha|-beta|-prerelease][.N]`). A digit directly
-// attached to the tag (e.g. `v0.1.0-beta1`) is REJECTED by the loader and
+// attached to the tag (e.g. `v0.1.0-beta3`) is REJECTED by the loader and
 // surfaces only as "unexpected type string". See GeodeVersion.hpp for the
 // full root-cause analysis and the regression test in tests/UnitTests.cpp.
-inline constexpr const char* kOptiGDVersion = "0.1.0-beta.2";
-inline constexpr const char* kOptiGDVersionTag = "v0.1.0-beta.2";
+inline constexpr const char* kOptiGDVersion = "0.1.0-beta.3";
+inline constexpr const char* kOptiGDVersionTag = "v0.1.0-beta.3";
 inline constexpr const char* kTargetGDVersion = "2.2081";
 inline constexpr const char* kTargetGeodeVersion = "v5.10.1";
+
+// ---------------------------------------------------------------------------
+// Measurement-integrity thresholds shared by every subsystem.
+//
+// One definition, because the beta.2 frame hook, the diagnostics engine and the
+// adaptive governor each carried their own idea of what a "long" interval was
+// (the hook used a hardcoded 250 ms *cap* that silently replaced a real stall
+// with the engine's clamped `dt`, so a multi-second freeze became invisible and
+// was reported as a fast frame).
+//
+// Semantics:
+//   * interval <= kStallThresholdMs : gameplay. Counted in every window.
+//   * interval >  kStallThresholdMs : a stall (pause, application switch, level
+//     load, scheduler pre-emption). Level diagnostics keep it as a sample and
+//     count it in `stall_frames`; Benchmark Mode excludes it from the captured
+//     window and records a gap event, because a "60 second" capture must
+//     contain 60 seconds of gameplay.
+//   * interval > kHitchThresholdMs but <= kStallThresholdMs : a hitch. Always
+//     kept in the distribution and counted, never hidden by a percentile.
+// ---------------------------------------------------------------------------
+inline constexpr double kStallThresholdMs = 250.0;
+inline constexpr double kStallThresholdUs = kStallThresholdMs * 1000.0;
+inline constexpr double kHitchThresholdMs = 1000.0 / 30.0;  // below 30 FPS
 
 struct Point2D {
     float x{0.0f};
@@ -224,6 +247,32 @@ struct FrameStats {
     size_t arenaAllocatedBytes{0};
     size_t arenaAllocationCount{0};
     uint32_t heapAllocationsAvoided{0};
+
+    // ---------------------------------------------------------------------
+    // Fields added in v0.1.0-beta.3.
+    //
+    // Repo rule (DESIGN_LOG.md Entry 5.3): never insert a member in the middle
+    // of a struct that may be aggregate-initialized. New members are appended
+    // last, after `heapAllocationsAvoided`, so existing positional or
+    // brace-initialization cannot silently shift into the wrong slot.
+    // ---------------------------------------------------------------------
+
+    // Thread CPU time (CLOCK_THREAD_CPUTIME_ID / GetThreadTimes) spent inside
+    // the same call that `updateCpuTimeUs` measures with the wall clock.
+    // `updateCpuTimeUs` is a *wall* span: if the game thread is preempted the
+    // two diverge, and only this field distinguishes "the update took long"
+    // from "the update was not scheduled". 0.0 when the platform cannot supply
+    // thread CPU time.
+    double updateThreadCpuUs{0.0};
+
+    // True when this frame was accepted into the active measurement window.
+    // A frame whose inter-frame interval is long enough to be a pause, an
+    // application switch or a loader stall is recorded but not counted, so a
+    // report can never present a stalled interval as gameplay.
+    bool frameCounted{true};
+
+    // True when the inter-frame interval exceeded the gap threshold.
+    bool gapFrame{false};
 };
 
 } // namespace optigd::core

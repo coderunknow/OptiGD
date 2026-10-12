@@ -205,7 +205,7 @@ def validate_metadata(doc: dict, errors: list, warnings: list) -> None:
                     "    -> Geode reports this failure only as "
                     "'unexpected type string' (JsonValidation.hpp tryGet<T>)\n"
                     "    -> Use the vMAJOR.MINOR.PATCH-tag.N form, e.g. "
-                    "v0.1.0-beta.2" % msg)
+                    "v0.1.0-beta.3" % msg)
 
     if "developer" in doc and "developers" in doc:
         errors.append("mod.json: cannot have both 'developer' and 'developers'")
