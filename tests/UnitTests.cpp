@@ -584,6 +584,15 @@ void testGeodeVersionMetadataGrammar() {
     OPTIGD_ASSERT(!isValidGeodeVersionString("v0.1.0-beta2"),
                   "v0.1.0-beta2 must also be rejected (tag number requires a dot)");
 
+    // And so is the dot-less form of the version this build ships, whose exact
+    // error message AGENT.md §1 quotes. Asserted here so that quotation is
+    // measured rather than inferred from the grammar.
+    auto beta3 = parseVersionString("v0.1.0-beta3");
+    OPTIGD_ASSERT(!beta3.valid,
+                  "v0.1.0-beta3 must be rejected (tag number requires a dot)");
+    OPTIGD_ASSERT(beta3.error == "Expected end of version, found '3'",
+                  "the rejected form must report the offending digit");
+
     // The form actually used by this build must parse.
     auto current = parseVersionString(optigd::core::kOptiGDVersionTag);
     OPTIGD_ASSERT(current.valid,
