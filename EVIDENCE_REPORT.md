@@ -340,7 +340,9 @@ All executed in this environment on the standalone engine build (Linux x86_64, G
 | Full suite | `ctest --test-dir build --output-on-failure` | **PASS** — 8/8 |
 | Compiler warnings | `-Wall -Wextra -Wpedantic` | **Clean** — zero warnings across all four standalone targets |
 | Address + UB sanitizers | `cmake -B build-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"`, then `ctest` + both binaries | **PASS** — 51/51 tests, 8/8 ctest, `optigd_benchmark` completed; no ASan/UBSan findings, no leaks |
-| CI packaging step, dry-run | the `Prepare Installable Package For Download` `run:` script extracted from `build.yml` and executed locally against a stand-in `.geode` | **PASS** — exit 0; produced `coderunknow.optigd-v0.1.0-beta.3-Win64.geode`, `SHA256SUMS.txt`, `INSTALL.txt`, the step-summary table and all four `$GITHUB_OUTPUT` values. A dry run of the *script*, not of the Geode build: no `.geode` can be produced here (§7). |
+| CI packaging steps, dry-run | the `Prepare Installable Package For Download` and `Prepare Combined Package For Download` `run:` scripts extracted from `build.yml` and executed against stand-in archives — the combined one in a directory holding only the archive, which is the condition the real job runs in | **PASS** — both exit 0. The superseded combine step exits 2 with `jq: error: Could not open file mod.json`, reproducing the CI failure of commit `3587076` (§9.1). A dry run of the *scripts*, not of the Geode build: no `.geode` can be produced here. |
+| Artefact-verification job, dry-run + mutation test | the `Verify Every Published Artefact` `run:` script against synthetic artefact directories, then 10 mutations of them | **PASS** on the correct set (7 checks per platform artefact, 8 combined); **10/10 mutations detected**, each exit 1 with a specific message: altered bytes, missing `.dll`, foreign `.so`, wrong commit in the name, missing `INSTALL.txt`, altered inner `mod.json`, missing `SHA256SUMS.txt`, falsified `SHA256SUMS.txt`, nothing published, renamed package |
+| PR-comment step, dry-run | the `Record Checksums On The Pull Request` `run:` script against a stub `gh` | **PASS** — exit 0, rendered markdown inspected (it first failed on a shell quoting bug, recorded in `DESIGN_LOG.md` §7.7) |
 | Validator mutation check | 13 hand-tampered session artifacts (§4.3) | **13/13 detected**, each exit 1 with a specific message |
 | Geode-only translation units | `src/geode/Hooks.cpp`, `src/geode/BenchmarkUI.cpp` | **NOT RUN locally** — no Geode SDK/CLI/bindgen reachable; compiled by CI (§9) |
 
@@ -438,6 +440,43 @@ Mode opens, measures or saves anything in the real game. "All 6 CI jobs passed" 
 *builds and packages on three targets*, and it is reported as exactly that everywhere in
 this document.
 
+#### Run 3 — commit `0327231`: **ALL 6 JOBS PASSED** (the last run before the handoff pass)
+
+Runs `38108968555` (`pull_request`) and `38108967055` (`push`), both `success` on all six
+jobs, twelve check-runs green. The published artefacts were the three that existed at the
+time: `coderunknow.optigd-geode-package` (1,038,287 bytes, the combined archive) and the two
+standalone JSON artefacts. `mergeable_state` was `unstable` solely because of the external
+`Kilo Code Review` check (`action_required`, insufficient credits), which is not a job of
+this repository's workflow.
+
+#### Run 4 — commit `3587076` (the handoff pass): **5 of 6 jobs passed, `combine` FAILED**
+
+Runs `38207332745` (`push`) and `38207336767` (`pull_request`). Both standalone jobs and all
+three Geode target jobs **succeeded**, so the `src/geode/*` changes made in the handoff pass —
+which cannot be compiled in this environment — do compile, link and package on Windows x64,
+Android64 and Android32. The three new per-target artefacts were published, including
+`OptiGD-v0.1.0-beta.3-Win64-3587076` (364,321 bytes) on the `push` run.
+
+`Package Combined .geode Artifact` **failed** on both runs. The cause was the newly added
+`Prepare Combined Package For Download` step, not the mod: it read the version with
+`jq -r '.version' mod.json`, but the combine job never checks the repository out — the
+composite `combine` action only downloads the CLI and the per-platform archives, which is why
+the pre-existing verification step in that job reads `mod.json` from *inside* the archive. With
+no `mod.json` on disk, `jq` exits non-zero and `set -euo pipefail` fails the step before
+anything is published. Reproduced locally in a directory containing only the combined archive:
+the old step exits `2` with `jq: error: Could not open file mod.json: No such file or
+directory`; the corrected step, which takes the version from
+`unzip -p "$COMBINED_FILE" mod.json`, exits `0`. Because the job failed before its upload
+steps, that run published **no** `coderunknow.optigd-geode-package` and no combined named
+artefact — recorded here as a failure, not glossed over.
+
+The same local dry-run also caught a second defect in the new verification job before it was
+ever pushed: its artefact-name `case` patterns were written `*"-Win64-"`, which in shell means
+*ends with* `-Win64-`, so no artefact would have matched its platform and the job would have
+failed every artefact it exists to check. `pull_request` runs were also confirmed to build the
+merge-preview commit, so their artefacts carry that commit's short SHA (`-49490f1`) rather than
+the head's; the artefact that matches the head commit exactly comes from the `push` run.
+
 #### The real-game handoff commit — installable artefacts, and where its run is recorded
 
 The handoff pass (`DESIGN_LOG.md` Entry 7) changed what CI publishes without changing what
@@ -459,11 +498,25 @@ purely to record it would move the head away from the commit the artefact was bu
 which is the one property the handoff was asked to guarantee. This section is the standing
 explanation for that; the numbers themselves live in the PR.
 
-The packaging step was dry-run locally before it was pushed: the `run:` script was extracted
-from `build.yml` with its `${{ ... }}` expressions substituted and executed against a
-stand-in `.geode` archive, producing the named file, the checksum file, the install notes and
-the summary table with exit 0 (§8). That validates the script, not the Geode build — no
-`.geode` can be produced in this environment.
+A fourth job, `verify-published-artifacts`, closes the loop: it downloads the published
+artefacts back out of Actions storage and re-checks them as a tester would — one `.geode` per
+artefact, the artefact and package names carrying version, platform and commit,
+`sha256sum -c` against the checksum file inside the artefact, the right platform binaries
+present and no foreign ones, the `id` and `version` in the archive's own `mod.json`, and
+`INSTALL.txt` for platform artefacts. Every one of those is a gate, so a bad artefact fails
+the run instead of merely being described. Because job logs, artefact bytes and the matrix
+jobs' `$GITHUB_STEP_SUMMARY` are all unreachable through the API from this environment (the
+summary comes back with length 0), that job posts the table — including every SHA-256 and the
+exact `gh run download` command — as a comment on the pull request, which *is* readable.
+
+The packaging step, the combined-package step, the verification job and the comment step were
+all dry-run locally before being pushed: each `run:` script was extracted from `build.yml`
+with its `${{ ... }}` expressions substituted and executed against stand-in archives, and the
+verification job was additionally mutation-tested against ten broken fixtures (§8). That
+validates the scripts, not the Geode build — no `.geode` can be produced in this environment.
+It also earned its keep twice: it reproduced the combine job's failure exactly, and it caught
+a shell `case` pattern (`*"-Win64-"`, which anchors at the *end* of the string) that would
+have made the verification job reject every artefact it was written to check.
 
 ### 9.2 `v0.1.0-beta.2` — previous release (history, unchanged)
 
@@ -520,7 +573,7 @@ inspection.
 | 7 | Documented Windows x64 CapFrameX procedure + honest test evidence | **Procedure and tool `VERIFIED`; capture `NOT RUN` / `BLOCKED`** | Procedure in-game (**External**) and in `docs/BENCHMARKS.md` §3; `tools/compare_capframex.py` self-tested (ctest). No Windows host, GPU or CapFrameX binary here, so **no external numbers exist** and the CSV fixtures are synthetic. |
 | 8 | Discovered bugs investigated, fixed and tested | **`VERIFIED`** | Defects A–U in `DESIGN_LOG.md` §6.3 and §6.7 and W, X, Y, Z plus the panel-guidance gap in §7.2, each with file, root cause, fix and a named regression test. Defect W additionally has an out-of-process guard (`tools/audit_setting_types.py`, two ctest checks) because it is a disagreement between two files that no unit test can see. |
 | 9 | Version metadata satisfies Geode's `v0.1.0-beta.3` grammar | **`VERIFIED`** | `tools/validate_geode_metadata.py` (ctest) + `testGeodeVersionMetadataGrammar` + the ported `VersionInfo::parse`; the dot before `3` is mandatory and `v0.1.0-beta3` is asserted rejected. |
-| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only, for the runs named in §9.1** | Runs `38108365707` (commit `edc0048`) and `38108968555`/`38108967055` (commit `0327231`): all six jobs green, all three Geode targets compiled, linked and packaged, and the combined `.geode` carries all three binaries with `mod.json` asserting `v0.1.0-beta.3`. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V. Nothing was executed in game, and no target was removed or disabled to get a green run. **The handoff-pass commit is newer than every run tabulated here**: its own run id, artefact name and SHA-256 are recorded in the PR conversation, because a file cannot contain the id of the run that builds it, and a previous green run does not validate a newer commit. |
+| 10 | Win64 / Android64 / Android32 builds still validated | **`[VERIFIED]` — build and package only, for the runs named in §9.1** | Runs `38108365707` (commit `edc0048`) and `38108968555`/`38108967055` (commit `0327231`): all six jobs green (§9.1, Runs 2 and 3), all three Geode targets compiled, linked and packaged, and the combined `.geode` carries all three binaries with `mod.json` asserting `v0.1.0-beta.3`. The first run (`38107167242`, commit `4c686ef`) **failed all three** on defect V. Nothing was executed in game, and no target was removed or disabled to get a green run. The handoff-pass commit `3587076` is Run 4: three Geode targets green, combine **failed** on a defect in the new packaging step. Its replacement is newer than every run tabulated here, and its own run id, artefact names and SHA-256 values are recorded in the PR conversation, because a file cannot contain the id of the run that the push triggers, and a previous green run does not validate a newer commit. |
 | 11 | Docs and `DESIGN_LOG.md` accurate | **`VERIFIED`** | `README.md`, `CHANGELOG.md`, `docs/{ARCHITECTURE,BENCHMARKS,RELEASE_WORKFLOW}.md`, this report; `DESIGN_LOG.md` Entry 6 extended (§6.6–§6.10) and Entry 7 added for the handoff pass, without editing earlier entries. `AGENT.md` untouched: no governance change was authorized, and the standing instruction is to ask first — the question about its stale `v0.1.0-beta.2` version references was put to the maintainer and is recorded as an open decision in §10.3. |
 | 12 | Actual results reported; anything not run marked `NOT RUN` / `BLOCKED` | **`VERIFIED`** | This report, `CHANGELOG.md` Notes, `DESIGN_LOG.md` §6.9–§6.10 and `docs/BENCHMARKS.md` all carry the same tags. |
 | 13 | No fabricated measurements, FPS gains, benchmark outputs or CI results | **`VERIFIED`** | Every artifact from a standalone binary is stamped `[SIMULATED]` and the code cannot stamp it otherwise (§4.4); the emitted "50.00 → 62.50 FPS" is a declared fixture; CI status is read from the GitHub API, and §9.1 reports the failed run as a failure with its cause rather than presenting only the green one. |

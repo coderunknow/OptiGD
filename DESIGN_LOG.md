@@ -901,6 +901,10 @@ guard's own guard) — `ctest` grows from 6 to **8** checks.
 | Auditor mutation test | `tools/audit_setting_types.py --self-test` | **13/13 cases PASS**; plus the real-tree mutation above (`FAIL` with W reintroduced) |
 | Workflow YAML | `yaml.safe_load` over `.github/workflows/build.yml` | parses; both new steps present in their jobs |
 | Packaging step, dry-run | extracted `run:` script executed locally against a stand-in `.geode` | exit `0`; produced the named file, `SHA256SUMS.txt`, `INSTALL.txt`, the step-summary table and the four `$GITHUB_OUTPUT` values |
+| Combined-package step, dry-run | same, for the combine job, in a directory holding **only** the archive — the condition the real job runs in | corrected step exit `0`; the version it replaced exits `2` with `jq: error: Could not open file mod.json`, reproducing the CI failure of §7.10 |
+| Artefact-verification job, dry-run | the `Verify Every Published Artefact` `run:` script against synthetic artefact directories | exit `0`: 7 checks per platform artefact, 8 for the combined one |
+| Artefact-verification job, mutation test | 10 mutations of those fixtures (§7.8) | **10/10 detected**, each exit `1` with a specific message; the unmutated control passes |
+| PR-comment step, dry-run | the `Record Checksums On The Pull Request` `run:` script against a stub `gh` | exit `0`, rendered markdown inspected. It first failed with `unexpected EOF while looking for matching backtick`: a two-line `echo` ending in `\"` does not continue a shell string, it embeds a quote. Rewritten as one line. |
 
 The new test is `testBenchmarkWallClockCeilingIsAGuardNotABudget`. It sets a 5 s target with
 a 6 s ceiling, drives the controller through the ceiling with **zero** accepted frames and
@@ -936,12 +940,44 @@ for that platform, and the same treatment for the combined archive as
 asked for.
 
 Each of those steps also writes the version, target, commit, run id, byte size, SHA-256 and
-the `unzip -l` archive listing into `$GITHUB_STEP_SUMMARY`, so the checksum is readable from
-the run page and from the API (`/check-runs/{id}` → `.output.summary`) without downloading
-anything. The existing artefact names are untouched — `release.yml` depends on
+the `unzip -l` archive listing into `$GITHUB_STEP_SUMMARY`, visible on the run page. The
+existing artefact names are untouched — `release.yml` depends on
 `coderunknow.optigd-geode-package` — and nothing is committed to the repository: binaries
 stay in Actions storage. `if-no-files-found: error` makes a silently empty upload a failed
 job rather than a missing artefact.
+
+A step summary is not enough on its own, for two reasons found by trying it rather than
+assuming it. Job logs and artefact downloads both redirect to
+`productionresultssa*.blob.core.windows.net`, which is outside this environment's egress
+allowlist, so neither the log of a job nor the bytes of an artefact can be read back from
+here; and `GET /repos/{owner}/{repo}/check-runs/{id}` returns `.output.summary` with
+**length 0** for an Actions job (observed on job `114673924412`), so the summary is a
+browser-only surface. A checksum nobody can read is not a recorded checksum.
+
+So a fourth job was added: **`verify-published-artifacts`** (`needs: [build-geode-mod,
+combine]`, ubuntu, `permissions: contents: read, actions: read, pull-requests: write`). It
+downloads the published artefacts back out of Actions storage with
+`actions/download-artifact@v7` and verifies them the way a tester would, then posts the
+result to the pull request — a channel that *is* readable through the API. Per artefact it
+checks: exactly one `.geode`; the artefact name is
+`OptiGD-<version>-<target>-<short-sha>` for the commit being built; the packaged file name
+matches; `sha256sum -c SHA256SUMS.txt` passes inside the artefact directory (i.e. the
+recorded checksum matches the file that was actually published); the archive contains
+`mod.json` and the binaries belonging to that target; it contains **no** binary belonging to
+another target; the `mod.json` inside the archive carries the expected `id` and `version`;
+and platform artefacts carry `INSTALL.txt`. Any failure fails the job — these are gates, not
+notes. On `push` events it then posts one comment to the open pull request for the branch
+with the whole table, the run link, the exact `gh run download` command and the SHA-256 of
+every artefact.
+
+The job was dry-run and mutation-tested locally before being pushed: its `run:` script was
+extracted from `build.yml` and executed against synthetic artefact directories. It passes on
+a correct set (7 checks per platform artefact, 8 for the combined one) and fails with a
+specific message on each of ten mutations — altered package bytes, a missing `.dll`, a
+foreign `.so` in the Win64 package, an artefact named for another commit, a missing
+`INSTALL.txt`, an altered inner `mod.json` version, a missing `SHA256SUMS.txt`, a
+`SHA256SUMS.txt` that records a lie, no artefacts published at all, and a renamed package
+file. The comment step was executed against a stub `gh` and its rendered markdown inspected.
 
 ### 7.9 What remains unverified, precisely
 
@@ -961,3 +997,40 @@ job rather than a missing artefact.
   `[NOT RUN] / [BLOCKED]`**, as in §6.10 and §5 of `EVIDENCE_REPORT.md`.
 - The bindings the Geode jobs compile against are `geode-sdk/bindings` `main` at run time —
   a property of the upstream composite action, unchanged by this pass.
+
+### 7.10 CI on commit `3587076`: five of six jobs green, and a defect in the new step itself
+
+The first run of the handoff commit (`3587076`; runs `38207332745` on `push` and
+`38207336767` on `pull_request`) passed both standalone jobs and **all three Geode target
+jobs** — so the `Hooks.cpp` and `BenchmarkUI.cpp` changes in §7.2, which cannot be compiled
+in this environment, do compile, link and package on Windows x64, Android64 and Android32.
+The three named per-target artefacts were published, including
+`OptiGD-v0.1.0-beta.3-Win64-3587076` (364,321 bytes).
+
+The `Package Combined .geode Artifact` job **failed** on both runs, and the cause was the new
+step, not the mod: `Prepare Combined Package For Download` read the version with
+`jq -r '.version' mod.json`, but the combine job never checks the repository out — the
+composite `combine` action only downloads the CLI and the per-platform archives, which is
+also why the pre-existing verification step in that job reads `mod.json` from *inside* the
+archive. With no `mod.json` on disk, `jq` exits non-zero and `set -euo pipefail` fails the
+step before anything is published. Reproduced locally in a directory containing only the
+combined archive: the old step exits `2` with
+`jq: error: Could not open file mod.json: No such file or directory`; the corrected step,
+which takes the version from `unzip -p "$COMBINED_FILE" mod.json`, exits `0`.
+
+Two consequences worth keeping. First, the dry-run habit caught a *different* defect in the
+same edit: the artefact-name `case` patterns were written `*"-Win64-"`, which in shell
+means "ends with `-Win64-`", so no artefact would ever have matched its platform and the
+verification job would have failed every artefact as unidentified. Second, the failure was
+confined to the job that publishes the combined archive; nothing was weakened, skipped or
+removed to get past it, and the fix is in the commit that records this section.
+
+That commit is therefore the artefact commit: its own run id, artefact names and SHA-256
+values are posted to the pull request by the `verify-published-artifacts` job, because a
+file cannot contain the id of the run that the push triggers, and adding a further commit
+just to record it would move the head away from the commit the artefact was built from.
+
+On the same run, one boundary was confirmed rather than assumed: `pull_request`-triggered
+runs build the merge-preview commit, so their artefacts are named with that commit's short
+SHA (`-49490f1` on run `38207336767`), not the head's. The artefact that matches the head
+commit exactly is the one from the `push` run. Both exist; the handoff names the `push` one.
