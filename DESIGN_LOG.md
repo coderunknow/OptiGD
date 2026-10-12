@@ -900,8 +900,10 @@ guard's own guard) — `ctest` grows from 6 to **8** checks.
 | Setting-type audit vs. real tree | `tools/audit_setting_types.py` | 16 declared settings, 32 call sites, **PASS** |
 | Auditor mutation test | `tools/audit_setting_types.py --self-test` | **13/13 cases PASS**; plus the real-tree mutation above (`FAIL` with W reintroduced) |
 | Workflow YAML | `yaml.safe_load` over `.github/workflows/build.yml` | parses; both new steps present in their jobs |
-| Packaging step, dry-run | extracted `run:` script executed locally against a stand-in `.geode` | exit `0`; produced the named file, `SHA256SUMS.txt`, `INSTALL.txt`, the step-summary table and the four `$GITHUB_OUTPUT` values |
-| Combined-package step, dry-run | same, for the combine job, in a directory holding **only** the archive — the condition the real job runs in | corrected step exit `0`; the version it replaced exits `2` with `jq: error: Could not open file mod.json`, reproducing the CI failure of §7.10 |
+| Publishing job, dry-run | each of the four `Prepare Named Package` `run:` scripts extracted from `build.yml` and executed against stand-in source artefacts | all four exit `0`, producing the named `.geode`, `SHA256SUMS.txt` and a correct `INSTALL.txt` |
+| Publishing job, mutation test | 6 mutations of the Win64 source artefact | **6/6 detected**, each exit `1` with a specific message: a foreign `.so` inside it, its `.dll` missing, two `.geode` files, none at all, an inner `mod.json` with another version, another id — plus the unmutated control passing |
+| A superseded step, dry-run | the combined-package step as first written, in a directory holding **only** the archive — the condition the real combine job runs in | exit `2` with `jq: error: Could not open file mod.json`: a real latent defect (that job has no checkout), though **not** the cause of the CI failures, which was step 2 of the job (§7.10) |
+| Workflow structure | `yaml.safe_load` over `build.yml`; job graph and per-job step lists printed; upstream `combine/action.yml` and `action.yml` read from `api.github.com` | parses; `standalone → build-geode-mod → combine → publish-installable-packages → verify-published-artifacts`; the upstream action's `find … -name '*.geode'` glob and its `delete-artifacts` input confirmed in its source |
 | Artefact-verification job, dry-run | the `Verify Every Published Artefact` `run:` script against synthetic artefact directories | exit `0`: 7 checks per platform artefact, 8 for the combined one |
 | Artefact-verification job, mutation test | 10 mutations of those fixtures (§7.8) | **10/10 detected**, each exit `1` with a specific message; the unmutated control passes |
 | PR-comment step, dry-run | the `Record Checksums On The Pull Request` `run:` script against a stub `gh` | exit `0`, rendered markdown inspected. It first failed with `unexpected EOF while looking for matching backtick`: a two-line `echo` ending in `\"` does not continue a shell string, it embeds a quote. Rewritten as one line. |
@@ -930,21 +932,31 @@ first thing that builds them.
 
 ### 7.8 The installable artefact
 
-CI already uploaded `coderunknow.optigd-geode-package` (all three platforms in one archive)
-plus the two standalone JSON artefacts. What it did not upload was anything a tester could
-identify: no platform in the name, no version, no commit, no checksum. `build.yml` now adds,
-per Geode target, a second artefact named `OptiGD-<version>-<target>-<short-sha>` containing
-`coderunknow.optigd-<version>-<target>.geode`, `SHA256SUMS.txt` and an `INSTALL.txt` written
-for that platform, and the same treatment for the combined archive as
-`OptiGD-<version>-combined-<short-sha>`. The Windows x64 one is the deliverable this task
-asked for.
+CI already uploaded `coderunknow.optigd-geode-package` (all three platforms in one archive),
+the per-platform `geode-build-<target>` artefacts the upstream build action leaves behind, and
+the two standalone JSON artefacts. What it did not upload was anything a tester could
+identify: no platform in the name, no version, no commit, no checksum.
 
-Each of those steps also writes the version, target, commit, run id, byte size, SHA-256 and
-the `unzip -l` archive listing into `$GITHUB_STEP_SUMMARY`, visible on the run page. The
-existing artefact names are untouched — `release.yml` depends on
-`coderunknow.optigd-geode-package` — and nothing is committed to the repository: binaries
-stay in Actions storage. `if-no-files-found: error` makes a silently empty upload a failed
-job rather than a missing artefact.
+`build.yml` now adds a **`publish-installable-packages`** job (`needs: [build-geode-mod,
+combine]`, ubuntu, four matrix legs: Win64, Android64, Android32 and combined). Each leg
+downloads the artefact that already holds that platform's archive — `geode-build-win`,
+`geode-build-android64`, `geode-build-android32`, `coderunknow.optigd-geode-package` — proves
+it really is the platform it is about to be named for (exactly one `.geode`; the binaries
+required for that target present; every other target's binaries **absent**; the `id` and
+`version` in the archive's own `mod.json` matching the repository's), renames it to
+`coderunknow.optigd-<version>-<target>.geode`, writes `SHA256SUMS.txt` and a platform-specific
+`INSTALL.txt` beside it, and uploads the three as
+`OptiGD-<version>-<target>-<short-sha>`. The Windows x64 leg is the deliverable this task asked
+for. `if-no-files-found: error` makes a silently empty upload a failed job rather than a missing
+artefact, and each leg writes the version, target, source artefact, commit, run id, size,
+SHA-256 and the `unzip -l` listing into `$GITHUB_STEP_SUMMARY`.
+
+The job runs *after* `combine`, and that ordering is load-bearing rather than cosmetic — see
+§7.10. It also needs the per-platform artefacts to still exist at that point, so the combine
+step now passes the action's own documented `delete-artifacts: false` input; by default it
+deletes `geode-build-*` once it has merged them. Nothing else about the build or combine jobs
+changed, the existing artefact names are untouched (`release.yml` depends on
+`coderunknow.optigd-geode-package`), and no binary is committed to the repository.
 
 A step summary is not enough on its own, for two reasons found by trying it rather than
 assuming it. Job logs and artefact downloads both redirect to
@@ -954,8 +966,9 @@ here; and `GET /repos/{owner}/{repo}/check-runs/{id}` returns `.output.summary` 
 **length 0** for an Actions job (observed on job `114673924412`), so the summary is a
 browser-only surface. A checksum nobody can read is not a recorded checksum.
 
-So a fourth job was added: **`verify-published-artifacts`** (`needs: [build-geode-mod,
-combine]`, ubuntu, `permissions: contents: read, actions: read, pull-requests: write`). It
+So a fifth job was added: **`verify-published-artifacts`** (`needs:
+publish-installable-packages`, ubuntu, `permissions: contents: read, actions: read,
+pull-requests: write`). It
 downloads the published artefacts back out of Actions storage with
 `actions/download-artifact@v7` and verifies them the way a tester would, then posts the
 result to the pull request — a channel that *is* readable through the API. Per artefact it
@@ -998,39 +1011,72 @@ file. The comment step was executed against a stub `gh` and its rendered markdow
 - The bindings the Geode jobs compile against are `geode-sdk/bindings` `main` at run time —
   a property of the upstream composite action, unchanged by this pass.
 
-### 7.10 CI on commit `3587076`: five of six jobs green, and a defect in the new step itself
+### 7.10 CI on commits `3587076` and `f3952b2`: the new artefacts broke the upstream combine action, and a first diagnosis that was wrong
 
-The first run of the handoff commit (`3587076`; runs `38207332745` on `push` and
-`38207336767` on `pull_request`) passed both standalone jobs and **all three Geode target
-jobs** — so the `Hooks.cpp` and `BenchmarkUI.cpp` changes in §7.2, which cannot be compiled
-in this environment, do compile, link and package on Windows x64, Android64 and Android32.
-The three named per-target artefacts were published, including
-`OptiGD-v0.1.0-beta.3-Win64-3587076` (364,321 bytes).
+Both runs of the handoff work passed the two standalone jobs and **all three Geode target
+jobs**, which is the first time the `Hooks.cpp` and `BenchmarkUI.cpp` changes of §7.2 were
+compiled anywhere: they build, link and package on Windows x64, Android64 and Android32. Run
+`38207332745` (commit `3587076`) published `OptiGD-v0.1.0-beta.3-Win64-3587076` (364,321
+bytes) and its two Android counterparts.
 
-The `Package Combined .geode Artifact` job **failed** on both runs, and the cause was the new
-step, not the mod: `Prepare Combined Package For Download` read the version with
-`jq -r '.version' mod.json`, but the combine job never checks the repository out — the
-composite `combine` action only downloads the CLI and the per-platform archives, which is
-also why the pre-existing verification step in that job reads `mod.json` from *inside* the
-archive. With no `mod.json` on disk, `jq` exits non-zero and `set -euo pipefail` fails the
-step before anything is published. Reproduced locally in a directory containing only the
-combined archive: the old step exits `2` with
-`jq: error: Could not open file mod.json: No such file or directory`; the corrected step,
-which takes the version from `unzip -p "$COMBINED_FILE" mod.json`, exits `0`.
+`Package Combined .geode Artifact` **failed on both runs** (`38207332745` / `38207336767` for
+`3587076`, `38208852829` / `38208855985` for `f3952b2`), and because
+`verify-published-artifacts` depends on it, that job was skipped.
 
-Two consequences worth keeping. First, the dry-run habit caught a *different* defect in the
-same edit: the artefact-name `case` patterns were written `*"-Win64-"`, which in shell
-means "ends with `-Win64-`", so no artefact would ever have matched its platform and the
-verification job would have failed every artefact as unidentified. Second, the failure was
-confined to the job that publishes the combined archive; nothing was weakened, skipped or
-removed to get past it, and the fix is in the commit that records this section.
+**The first diagnosis was wrong, and the correction matters more than the bug.** The combine
+job had gained a step that read the version with `jq -r '.version' mod.json`; that job never
+checks the repository out, so the read could not work. Reproduced locally in a directory
+holding only the combined archive, the step exits `2` with `jq: error: Could not open file
+mod.json: No such file or directory`. That defect was real — but it was *latent*: the job was
+failing before it ever reached that step. What identified it was
+`GET /repos/{owner}/{repo}/actions/jobs/{id}` → `.steps[]`, which returns a conclusion per
+step and needs no log access. It reported step 2, `Combine Platform Binaries` — the upstream
+composite action — as `failure` and steps 3 to 6 as `skipped`. Annotations said only "Process
+completed with exit code 1"; the per-step API said where.
 
-That commit is therefore the artefact commit: its own run id, artefact names and SHA-256
-values are posted to the pull request by the `verify-published-artifacts` job, because a
-file cannot contain the id of the run that the push triggers, and adding a further commit
-just to record it would move the head away from the commit the artefact was built from.
+**The actual cause.** `geode-sdk/build-geode-mod/combine@main` downloads *every* artefact in
+the run (`actions/download-artifact@v8` with no pattern) and then merges whatever
+`find ./artifacts -name '*.geode' -type f | sort -u` turns up, looking for each name inside
+the per-platform directories `geode-build-win`, `geode-build-mac`, `geode-build-android32`,
+`geode-build-android64`, `geode-build-ios`. The new `OptiGD-<version>-<target>-<short-sha>`
+artefacts each carried a differently named `.geode` at their own root, so for those three
+names the action found no per-platform match, its lone-artefact fallback also missed (the file
+sits in a subdirectory, not at `./artifacts/<name>`), and it called `geode package merge` with
+**no input files**, which exits non-zero. Publishing the named packages from the build jobs
+therefore broke the combine job for everyone downstream — a self-inflicted integration defect,
+not an upstream regression. Two independent observations support it: the merge step is where
+the job died, and the `geode-build-*` artefacts survived both runs, which they only do when
+the action fails before its `delete-artifact` step.
 
-On the same run, one boundary was confirmed rather than assumed: `pull_request`-triggered
-runs build the merge-preview commit, so their artefacts are named with that commit's short
-SHA (`-49490f1` on run `38207336767`), not the head's. The artefact that matches the head
-commit exactly is the one from the `push` run. Both exist; the handoff names the `push` one.
+**The fix.** The named packages moved out of the build jobs and out of the combine job into
+the new `publish-installable-packages` job, which runs *after* combine, so no artefact with a
+renamed `.geode` exists while the upstream action is globbing the run; and combine is now
+called with `delete-artifacts: false` so the per-platform archives are still there to publish
+from. The build and combine jobs are otherwise byte-identical to the version that passed in
+run 3, apart from that one documented input. The `jq`-from-disk step was deleted rather than
+patched, since the job that publishes the combined package now has a checkout and reads the
+version from `mod.json` like every other leg.
+
+No target, check or gate was removed or weakened to get past this, and the failure is recorded
+here rather than dropped: run 4 and run 5 both published **no** combined artefact.
+
+**What the local dry-runs did and did not earn.** They caught two genuine defects in the new
+steps — the `jq`-from-disk read, and a `case` pattern written `*"-Win64-"`, which in shell
+anchors at the *end* of the string and would have made the verification job reject every
+artefact it exists to check — and they caught a shell quoting bug in the comment step. They did
+**not** catch the interaction with the upstream combine action, because a dry run of one step
+cannot see what another job's action does with the artefacts a run contains. The lesson
+recorded here is the one that generalizes: when a workflow step publishes something, ask what
+else in the run consumes artefacts by globbing, and read the upstream action before assuming
+its inputs are inert.
+
+On the same runs, one boundary was confirmed rather than assumed: `pull_request`-triggered runs
+build GitHub's merge-preview commit, so their artefacts are named with that commit's short SHA
+(`-49490f1` on run `38207336767`), not the head's. The artefact that matches the head commit
+exactly is the one from the `push` run.
+
+The commit that records this section is therefore the artefact commit: its own run id,
+artefact names and SHA-256 values are posted to the pull request by the
+`verify-published-artifacts` job, because a file cannot contain the id of the run that the push
+triggers, and adding a further commit just to record it would move the head away from the
+commit the artefact was built from.
